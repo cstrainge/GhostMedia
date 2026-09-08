@@ -7,15 +7,15 @@ depends on a behavior.
 ## Delivery order
 
 Build a portable, deterministic protocol core first. Prove it with a Windows
-userspace synthetic source and a macOS command-line synthetic sink. Then add Mac
-Core Audio output, then the Windows driver bridge. This prevents a driver or audio
+userspace synthetic source and an Apple command-line synthetic receiver. Then add
+Apple platform audio output, then the Windows driver bridge. This prevents a driver or audio
 callback problem from concealing a protocol defect.
 
 ```text
 shared core + fake transport
-  -> Windows service client <=> Mac CLI output server
-  -> Windows service client <=> Mac Core Audio output server
-  -> Windows WaveRT bridge <=> service client <=> Mac Core Audio output server
+  -> Windows control client/media sender <=> Apple CLI output server/media receiver
+  -> Windows control client/media sender <=> Apple platform-audio output server/media receiver
+  -> Windows WaveRT bridge <=> control client/media sender <=> Apple output server/media receiver
 ```
 
 Microphone and camera work begins only after the render path passes Phase 6.
@@ -48,8 +48,8 @@ a narrow crypto provider interface; replay windows; bounded jitter and PCM queue
 profile validation; drift/timing calculations; typed metrics; and state actions.
 It does not own sockets, TLS, mDNS, platform key stores, CSPRNG, device clocks,
 audio codecs/resamplers, threads, or filesystems. Platform adapters provide those
-dependencies and execute typed core actions such as send-control, send-UDP, start
-path challenge, stop stream, and emit event.
+dependencies and execute typed core actions such as send-control, send-UDP,
+Windows-sender path challenge, stop stream, and emit event.
 
 ```c
 typedef struct gm_session gm_session;
@@ -117,7 +117,8 @@ Do not install a driver. Build a TLS feasibility spike that creates the exact Ed
 leaf, performs mutually authenticated TLS 1.3, rejects system roots/extra chains,
 and exports the required context-bound secret.
 
-**macOS:** pin Xcode/Swift; import the empty C module from a Swift CLI receiver.
+**macOS/iOS:** pin the Apple toolchains; import the empty C module from an Apple
+output-server CLI receiver.
 Run the same TLS feasibility spike with Keychain identity storage and the intended
 Network.framework or lower-level TLS adapter.
 
@@ -202,27 +203,29 @@ certificate shortcuts, and test-key leakage in logs.
 **Goals:** demonstrate secure Windows-to-Apple UDP audio without a virtual driver or
 Core Audio output.
 
-**Components:** Windows console client, macOS CLI output server, mDNS/TCP/TLS/UDP
-adapters, synthetic PCM source/sink.
+**Components:** Windows console control client/media sender, macOS CLI output
+server/media receiver, mDNS/TCP/TLS/UDP adapters, synthetic PCM source/sink.
 
-**Shared core:** drive hello, bind, stream open, path challenge, start, feedback,
-rekey, stop, close, interface-loss actions, and metrics. Adapters transmit core
-bytes unchanged.
+**Shared core:** drive hello, bind, stream open, Windows-to-Apple path challenge,
+start with a Windows source-timestamp boundary, feedback, sender-initiated rekey,
+stop, close, interface-loss actions, and metrics. Adapters transmit core bytes
+unchanged.
 
 **Windows:** browse configured Apple servers only on an explicitly enabled private
 interface. Generate 48 kHz stereo sine/silence PCM, packetize through core, and
 enforce client-side connection limits. No driver code.
 
-**macOS:** advertise or accept a manually configured Windows client, use preapproved trust,
-decrypt/reorder through core, print metrics, and drain decoded PCM into a deterministic
-discard sink.
+**macOS:** advertise or accept a manually configured Windows control client, use
+preapproved trust, decrypt/reorder through core, print metrics, and drain decoded
+PCM into the current local system-output route or a deterministic discard sink.
 
 **Synchronization:** satisfy G4 and G5 with captured successful/failed traces;
 agree on mDNS privacy, tuple/interface selection, reconnect, and timestamp inputs.
 
 **Exit tests:** loopback, two-host IPv4, IPv6 link-local scope, Wi-Fi loss/reorder/
-duplicate injection, TLS/UDP flood, path expiry, rekey, service restart, receiver
-loss, interface loss, simulated 30-minute epoch rollover, companion-indicator
+duplicate injection, TLS/UDP flood, Windows-initiated path expiry/retry,
+sender-initiated rekey, service restart, receiver loss, interface loss, simulated
+30-minute epoch rollover, indicator
 acknowledgement, local stop/revoke, and explicitly enabled headless mode.
 
 **Risks/traps:** testing only localhost, wrong IPv6 scope, socket source address
@@ -231,12 +234,13 @@ drift, mDNS API differences, and transport threads calling future callback code.
 **Deliverable:** repeatable two-machine command-line demo with capture traces. This
 is the first required end-to-end vertical slice.
 
-## Phase 4 — macOS Core Audio receiver
+## Phase 4 — Apple platform-audio output server
 
 **Goals:** replace the discard sink with reliable audible playback.
 
-**Components:** Swift app shell, `MacAudioOutput`, output AudioUnit, preallocated
-PCM ring, route-change monitor, device selector.
+**Components:** Swift app shell, `AppleAudioOutput`, output AudioUnit, preallocated
+PCM ring, system-output-route monitor. V1 has no GhostMedia-specific output-device
+selector and exposes no Apple-attached device inventory to Windows.
 
 **Shared core:** expose decoded PCM queue/pull, jitter metrics, output-underflow,
 output-running, and route-change discontinuity interfaces without Core Audio types.
@@ -244,19 +248,22 @@ output-running, and route-change discontinuity interfaces without Core Audio typ
 **Windows:** continue the synthetic source; display feedback only as telemetry.
 
 **macOS:** allocate rings before start, do ring read/silence fill only in callback,
-resample off callback, and send feedback from a worker. Flush/reprime on device,
-route, or sample-rate change.
+resample off callback, and send feedback from a worker. Observe the current Apple
+system route only; flush/reprime on local route or sample-rate change.
 
 **Synchronization:** satisfy G6: confirm PCM conversion/channel order,
 `rendered_media_timestamp`, feedback semantics, underflow, and discontinuity rules.
 
-**Exit tests:** golden tone/silence, device/rate changes, headset removal, forced
-underflow, 15/30/120 ms targets, drift simulation, sleep/wake, and app restart.
+**Exit tests:** golden tone/silence, system-route/rate changes, headset removal,
+forced underflow, 15/30/120 ms targets, drift simulation, sleep/wake, and app
+restart. Prove that no Apple-attached device inventory or route-selection control is
+exposed over GhostMedia.
 
 **Risks/traps:** Swift allocation or locks in the callback, callback/network time
-confusion, route notification races, and automatic device switching.
+confusion, route notification races, and automatic system-route switching.
 
-**Deliverable:** Mac app plays synthetic Windows audio and reports local state.
+**Deliverable:** Apple output-server app plays synthetic Windows audio through its
+system-default route and reports local state.
 
 ## Phase 5 — Windows userspace capture pipeline
 
@@ -289,7 +296,7 @@ priority starvation, and buffering that hides latency.
 ## Phase 6 — Windows virtual render driver and bridge
 
 **Goals:** implement the persistent virtual endpoint without changing proven network
-or Mac behavior.
+or Apple-device behavior.
 
 **Components:** WaveRT virtual render driver, INF/package, service-SID bridge IOCTLs,
 fixed section/event, PnP/power handling, ETW, Driver Verifier harness.
@@ -304,15 +311,15 @@ change; no allocation, network, or wait in the render path.
 **Windows userspace:** replace simulator with bridge client. On epoch change,
 discard conversion/send queues and initiate documented discontinuity.
 
-**macOS:** no redesign; run the same receiver/fixture regressions.
+**Apple output server:** no redesign; run the same receiver/fixture regressions.
 
 **Synchronization:** satisfy G7. Freeze descriptor, memory ordering, and epoch
-semantics. Mac verifies only visible effect: stop/discontinuity/reprime, never stale
+semantics. Apple receiver verifies only visible effect: stop/discontinuity/reprime, never stale
 audio.
 
 **Exit tests:** Driver Verifier, applicable WDK/HLK tests, PnP, sleep/resume, service
 kill/restart, unauthorized attach, stale epoch/handle races, 24-hour soak, playback
-with no Mac, no network, or blocked UDP.
+with no Apple output server, no network, or blocked UDP.
 
 **Risks/traps:** wrong IRQL, pageable render path, weak DACL, section reuse, treating
 service availability as device availability, and driver installation recovery.
@@ -356,7 +363,7 @@ GhostMedia/
   protocol/{vectors,schemas,traces}/
   shared/{include/ghostmedia,core,crypto,test_support,tests}/
   WinDevice/{service,bridge_client,driver,installer,tests}/
-  Mac Client/{GhostMediaCore,GhostMediaApp,AudioOutput,tests}/
+  AppleOutputServer/{GhostMediaCore,GhostMediaApp,AudioOutput,tests}/
   tools/{vector_gen,packet_trace,network_fault_injector}/
   cmake/  .github/workflows/
 ```
@@ -372,30 +379,32 @@ small. Platform TLS, keys, DNS-SD, sockets, and audio frameworks remain adapters
 | --- | --- | --- |
 | Core fast | Windows, macOS, optional Linux | Build, unit, ABI, vectors, state traces |
 | Core hostile | Windows and macOS | Fuzz/property, replay/path/limit, sanitizers where supported |
-| Windows service | Windows | TLS/UDP/mDNS and simulated-bridge fault tests |
+| Windows control client | Windows | TLS/UDP/DNS-SD browse and simulated-bridge fault tests |
 | Windows driver | Self-hosted Windows lab | WDK build, Verifier, controlled install, bridge races |
-| macOS receiver | macOS lab | Swift ABI, Core Audio mocks, hardware route tests |
-| Two-host integration | Windows + Mac lab | Discovery, TLS, IPv4/IPv6, Wi-Fi faults, rekey, latency |
+| Apple output server | macOS/iOS lab | Swift ABI, platform-audio mocks, system-route tests |
+| Two-host integration | Windows + Apple-device lab | Discovery, TLS, IPv4/IPv6, Wi-Fi faults, rekey, latency |
 | Release | Both | Signed artifacts, upgrade/uninstall, SBOM, regression |
 
 Hosted CI cannot prove driver installation, multicast, Wi-Fi loss, hardware route,
-or IPv6 link-local behavior. Maintain a controlled Windows/Mac test lab and archive
+or IPv6 link-local behavior. Maintain a controlled Windows/Apple-device test lab and archive
 protocol version, vector hash, ABI version, build IDs, and results for each release.
 
 ## First end-to-end slice acceptance criteria
 
-Phase 3 is the first slice: Windows userspace generates 48 kHz stereo PCM and sends
-it through the shared core over mutual TLS/TCP and protected UDP to a Mac CLI receiver
-that validates, decrypts, reorders, and drains it into a deterministic discard sink.
+Phase 3 is the first slice: the Windows control client/media sender generates 48 kHz
+stereo PCM and sends it through the shared core over mutual TLS/TCP and protected UDP
+to an Apple CLI output server/media receiver that validates, decrypts, reorders, and
+drains it into a deterministic discard sink.
 
 1. Discovery is limited to an explicitly enabled private interface, or manual LAN
    addressing is explicitly authorized.
 2. Each side rejects unapproved, malformed, revoked, or wrong-pinned peers before
    exposing stream state or accepting media.
-3. The successful trace covers hello, bind, open, path challenge/response, start,
-   feedback, rekey, stop, and close with matching captured bytes.
+3. The successful trace covers hello, bind, open, Windows-to-Apple path
+   challenge/response, Windows source-timestamp start, feedback, sender-initiated
+   rekey, stop, and close with matching captured bytes.
 4. Loss, reorder, duplication, bad tags, replay, interface loss, receiver loss, and
    service restart remain bounded and follow documented state/error behavior.
 5. Windows C++ and macOS Swift harnesses match every vector and fake-clock trace.
 
-Only after this slice passes should Core Audio output and the Windows driver be added.
+Only after this slice passes should Apple platform output and the Windows driver be added.

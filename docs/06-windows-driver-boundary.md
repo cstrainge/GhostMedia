@@ -5,7 +5,7 @@
 The virtual audio driver is a WaveRT-style render endpoint. It is a kernel
 component. Networking, mDNS, TCP, TLS, UDP, codecs, JSON, trust, UI, and remote
 policy live only in the user-mode service. The driver contains no socket, DNS,
-certificate, remote hostname, codec, or Mac dependency.
+certificate, remote hostname, codec, or Apple-device dependency.
 
 The driver must remain stable through service crash/restart, delayed service reads,
 bad local requests, and all remote failures. It uses bounded nonblocking transfer

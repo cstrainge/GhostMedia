@@ -139,12 +139,15 @@ the other.
 Every active stream MUST produce a local, user-visible streaming indicator in the
 Apple output app that names the locally assigned Windows peer label and offers `Stop
 stream` and `Revoke peer` actions. The server waits for that app's ready acknowledgement
-before the first audio packet. An Apple output server without an available local UI
-rejects `stream.open` unless its local owner has explicitly enabled headless streaming;
-headless mode records active-stream state in its configuration UI. A local owner may
-globally disable new stream starts; that setting is persistent, defaults enabled after
-an explicit pairing grant, and causes new `stream.open` requests to return `FORBIDDEN`.
-V1 does not require approval for every reconnect, but its persistent authorization is
+before the first audio packet. This acknowledgement is an internal app/service
+readiness state, not a per-reconnect approval click. After pairing and persistent
+authorization, normal reconnects resume automatically whenever the Apple server and
+its local output are available. An Apple output server without an available local UI
+rejects `stream.open` unless its local owner has explicitly enabled headless or
+background streaming where the platform permits it; that mode records active-stream
+state in its configuration UI. A local owner may globally disable new stream starts;
+that setting is persistent, defaults enabled after an explicit pairing grant, and
+causes new `stream.open` requests to return `FORBIDDEN`. Persistent authorization is
 always inspectable and revocable.
 
 Unpaired devices may discover one another but cannot obtain a TLS session. Pairing

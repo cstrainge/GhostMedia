@@ -15,15 +15,17 @@ nonnegative values by 32767 and negative values by 32768, rounds ties away from
 zero, then clamps. Optional dithering is local and cannot change timeline or length.
 
 The baseline packet interval is 5 ms. It is independent from Windows mix period
-and Mac device callback size. The service accumulates and slices through a bounded
+and Apple device callback size. The service accumulates and slices through a bounded
 conversion ring; it never makes a driver callback align to the network cadence.
 
 ## Timeline and playout
 
-The Windows source timeline is u64 sample frames at the negotiated sample rate.
-`media_timestamp` names the first network frame in a packet after conversion. It
-advances by `frames_per_packet` through silence and dropped blocks. It resets only
-with new stream/session state, so a stream ID defines its epoch.
+The Windows media sender owns a u64 source timeline at the negotiated sample rate.
+`media_timestamp` names the first network frame in a packet after conversion. Windows
+advances it by `frames_per_packet` through silence and dropped blocks and declares a
+new boundary through `stream.start` after a new stream/session or discontinuity. The
+Apple media receiver may track and report rendered timestamps but never creates,
+renumbers, or resets this sender timeline.
 
 The Apple output server tracks source timestamp, its receive monotonic clock, and its output-device
 clock. Clocks have no shared origin or guaranteed equal rate. `monotonic_ns` is
@@ -68,7 +70,7 @@ It labels the result `estimated_end_to_end_latency` and includes an `unknown` fl
 when a route, clock, or hardware value is unavailable. UDP receipt, packet sequence,
 and TCP acknowledgement never prove audible output. The baseline objective is tested
 with a 48 kHz PCM stream, a 5 ms packet cadence, a private wired or Wi-Fi LAN, a
-Windows endpoint period no greater than 10 ms, and a Mac route whose reported output
+Windows endpoint period no greater than 10 ms, and an Apple route whose reported output
 latency is no greater than 20 ms. Other routes report their measured budget rather
 than claiming this objective.
 

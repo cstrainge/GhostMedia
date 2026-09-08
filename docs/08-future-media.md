@@ -6,15 +6,15 @@ unknown media kinds through a v1 peer. A v1 peer rejects them as `UNSUPPORTED_PR
 
 ## Microphone direction
 
-The likely future flow is Mac physical microphone -> Mac service -> protected UDP
--> Windows user-mode service -> Windows virtual recording endpoint. It is a new
+The likely future flow is Apple microphone source -> Apple output/input server ->
+protected UDP -> Windows user-mode service -> Windows virtual recording endpoint. It is a new
 device/driver bridge and has independent format, permission, mute, echo-cancellation,
 and clock rules. It must not feed received audio into the render driver or grant a
 network peer arbitrary capture access by virtue of system-audio permission.
 
 Required future control additions include a capability such as `audio_receive`, a
 separate authorization permission such as `inject_microphone`, explicit selected
-microphone identity/local consent, `stream.open` direction `mac_to_win`, and a
+Apple microphone identity/local consent, `stream.open` direction `apple_to_win`, and a
 recording endpoint availability state. The reverse UDP key, replay window, and
 feedback path already exist conceptually, but profile codes and packet semantics
 need a versioned definition. Echo cancellation must have access to a defined local
@@ -33,7 +33,7 @@ different magic/version namespace, such as `GMV`, so an audio parser never accep
 video. It must negotiate codec profile, width, height, frame rate, bit rate,
 keyframe request, and receiver capability over TCP. It must define what happens
 when packets/layers are missing and how an untrusted remote sender cannot exhaust
-decoder/GPU/driver resources. It must never expose the physical camera to a remote
+decoder/GPU/driver resources. It must never expose an Apple physical camera to a remote
 peer without a local authorization model.
 
 ## Extension rules

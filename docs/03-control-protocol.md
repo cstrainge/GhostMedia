@@ -101,9 +101,9 @@ only the following per-request fields:
 | --- | --- |
 | `session.hello` | `version`, `role`, `server_id`, `session_id`, `boot_id`, `udp_port`, `capabilities`, `limits` |
 | `transport.bind` | `udp_port`, `path_state` |
-| `stream.open` | `stream_id`, `key_epoch`, `profile`, `packet_interval_us`, `source_media_timestamp`, `path_state` |
+| `stream.open` | `stream_id`, `key_epoch`, `profile`, `packet_interval_us`, `path_state` |
 | `stream.rekey` | `stream_id`, `key_epoch`, `state` |
-| `stream.start` | `first_packet_not_before_monotonic_ns`, `first_media_timestamp` |
+| `stream.start` | `state` |
 | `stream.stop`, `stream.close` | `stream_id`, `state` |
 | `status.get` | `output_state`, `session_stream_state`, `transport_state`, `feedback_age_ms` |
 | `ping` | `token`, `monotonic_ns` |
@@ -189,7 +189,8 @@ The session ID must match. `udp_port` must equal hello's port in v1. The Apple o
 server responds with its port and `path_state:"bound"`; it does not itself send UDP.
 Calling bind twice returns the original committed tuple
 and state without reopening or changing it. A different port is `STATE_CONFLICT`.
-Neither party sends audio before the specific stream's `event.path.validated`.
+Windows sends no audio before it authenticates the specific stream's matching
+`PATH_RESPONSE` and completes `stream.start`.
 
 ### 4.2 `stream.open`
 
@@ -207,12 +208,11 @@ After a successful `transport.bind`, Windows requests one specific profile:
 `kind` and `direction` are fixed in v1. The Apple output server verifies the locally
 granted `receive_system_audio` permission, local output availability, a bound
 candidate tuple, sole-subscriber ownership, full profile support, and playout range.
-It reserves
-the subscription before responding. It returns
-an allocated `stream_id`, `key_epoch:1`, canonical accepted profile, nominal
-packet interval, current source media timestamp as a decimal string, and
-`path_state:"probing"`. It derives the two directional keys for that stream and
-begins the bounded path challenge in document 04 only after responding. A stream is
+It reserves the subscription before responding. It returns an allocated `stream_id`,
+`key_epoch:1`, canonical accepted profile, nominal packet interval, and
+`path_state:"probing"`. It derives the two directional keys for that stream. Windows
+begins the bounded path challenge in document 04 only after receiving this response.
+A stream is
 **open**, not yet sending. Duplicate open with exactly the same fields while that
 stream is open returns the same result; a nonidentical open is `STATE_CONFLICT`.
 
@@ -224,12 +224,15 @@ or fragmentation is used. Decoded duration must equal `frames_per_packet`.
 
 ### 4.3 `stream.start`, `stream.stop`, and `stream.close`
 
-`stream.start` has `stream_id`. It requires that stream's path to be validated.
-After its successful response, Windows may send audio beginning at the returned
-`first_packet_not_before_monotonic_ns`; this is a decimal string in the Apple output
-server's monotonic domain and is informational only. The first
-media packet MUST carry the returned `first_media_timestamp`; receivers flush any
-old playout state for that ID then. Starting an already started stream is idempotent.
+`stream.start` has `stream_id` and Windows-owned `first_media_timestamp`, a decimal
+u64 source-frame value after conversion to the negotiated network sample rate. It
+requires Windows to have authenticated the matching `PATH_RESPONSE` for that stream
+and epoch. The Apple output server validates the value's syntax, records it only as
+the sender's declared start boundary, flushes old receiver playout state, and returns
+`state:"started"`. After that response Windows may send AUDIO beginning with exactly
+that timestamp. The Apple media receiver MUST NOT generate a substitute source
+timestamp. Starting an already started stream is idempotent only with the same start
+timestamp.
 
 Before sending `stream.stop`, Windows stops send pacing, releases no ownership, and
 flushes its capture-to-network queue. The Apple output server's response confirms it
@@ -241,32 +244,30 @@ with the next valid source timestamp; the receiver treats this as a discontinuit
 
 ### 4.4 `stream.rekey`
 
-The Apple output server emits `event.stream.rekey_required` before its next packet
-would exceed the 30-minute, 2^32-packet, or sequence-wrap limit in document 02. Windows sends
-`stream.rekey` with exactly `stream_id` and `key_epoch` (equal to the current epoch
-plus one), for example
+Windows media sender detects the 30-minute, 2^32-packet, and sequence-exhaustion
+limits in document 02 and sends `stream.rekey` before it would exceed any of them.
+The request has exactly `stream_id` and `key_epoch` (equal to the current epoch plus
+one), for example
 
 ```json
 {"v":1,"id":8,"type":"stream.rekey","stream_id":1,"key_epoch":2}
 ```
 
-The Apple output server verifies that exact next value, derives the new epoch's
-directional keys, starts a fresh bounded path challenge, and returns `state:"probing"`
-while the old epoch continues paced audio. Windows never sends audio at the new epoch
-until `event.path.validated` for that stream. On validation it switches epochs at the
-next packet boundary, preserving media-timestamp continuity, and emits
-`event.stream.rekeyed` with `stream_id`, `old_key_epoch`, `key_epoch`, and
-`first_media_timestamp`. Windows has already derived the requested epoch and accepts
-both epochs during the five-second overlap without flushing its jitter buffer or
-calling `stream.start`. A rekey request with another value is `STATE_CONFLICT`; a
-duplicate committed request returns the same result. The old epoch is erased after
-the overlap. Failure to complete the transition before the old epoch limit stops and
-closes the stream.
+The Apple output server verifies the exact next value and derives the new epoch's
+directional keys. Windows derives the same keys, then sends a fresh Windows-to-Apple
+`PATH_CHALLENGE` under the new epoch. The Apple media receiver returns its
+`PATH_RESPONSE`; Windows authenticates that response and only then switches at the
+next packet boundary, preserving its source media-timestamp continuity. The Apple
+media receiver accepts old and new epochs for a five-second overlap without flushing
+its jitter buffer or calling `stream.start`. A rekey request with another value is
+`STATE_CONFLICT`; a duplicate committed request returns the same result. Both sides
+erase old epoch keys and path state after the overlap. Failure to complete the new
+path validation before the old epoch limit stops and closes the stream.
 
 ### 4.5 `status.get`, `ping`, and `session.close`
 
 `status.get` requires the separate locally granted `view_status`
-permission. Its v1 response is intentionally small: endpoint state (`available`,
+permission. Its v1 response is intentionally small: Apple output state (`available`,
 `unavailable`, or `faulted`), whether *this session* owns an active stream,
 transport state for this session, and a coarse `feedback_age_ms` in 0..6000.
 It never reveals another peer's identity, stream, counters, timestamps, audio,
@@ -291,12 +292,8 @@ Apple output states and a fixed reason enumeration, never a platform error:
 
 | Event | Required fields | Meaning |
 | --- | --- | --- |
-| `event.path.validated` | `stream_id`, `key_epoch` | That stream's path challenge/response authenticated |
-| `event.path.failed` | `stream_id`, `key_epoch`, `reason` | Path deadline elapsed; that epoch may not start |
-| `event.stream.started` | `stream_id`, `first_media_timestamp` | Send path committed |
+| `event.stream.started` | `stream_id`, `first_media_timestamp` | Apple received the first AUDIO; timestamp is the observed Windows sender value |
 | `event.stream.stopped` | `stream_id`, `reason` | Sender stopped; receiver flushes this stream |
-| `event.stream.rekey_required` | `stream_id`, `key_epoch`, `deadline_monotonic_ns` | Windows must initiate the next epoch |
-| `event.stream.rekeyed` | `stream_id`, `old_key_epoch`, `key_epoch`, `first_media_timestamp` | Sender switched at a continuous media boundary |
 | `event.output.state` | `state`, `reason` | Apple output availability changed |
 | `event.session.expiring` | `reason`, `deadline_monotonic_ns` | reconnect before key/session limit |
 
@@ -313,6 +310,6 @@ of trying to send a possibly unsynchronized error frame.
 
 TCP EOF, TLS alert, failed ping, or no received valid control frame for 6 seconds
 ends the session. An active stream additionally sends `ping` every 2 seconds.
-An endpoint may declare remote output lost based on receiver feedback but still
-keeps control alive until its timeout. TCP is never used for sample retransmission,
+Windows media sender may declare remote output lost based on Apple receiver feedback
+but still keeps control alive until its timeout. TCP is never used for sample retransmission,
 loss repair, or media carriage.

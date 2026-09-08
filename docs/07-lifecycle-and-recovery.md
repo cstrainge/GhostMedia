@@ -3,11 +3,12 @@
 ## State machines
 
 Apple output-server session states are `LISTENING -> TLS -> HELLO -> BOUND ->
-STREAM_OPEN -> PATH_VALIDATED -> STREAMING -> STREAM_OPEN`, with `CLOSED` reachable
-from every state. `STREAM_OPEN` means reserved but silent. Any TLS/control failure
-goes directly to `CLOSED`: stop streams, release subscriber ownership, erase keys,
-and retain driver operation. Windows follows the same control states but begins TCP
-and makes lifecycle requests.
+STREAM_OPEN -> STREAMING -> STREAM_OPEN`, with `CLOSED` reachable from every state.
+`STREAM_OPEN` means reserved but silent. Windows control-client states follow the
+same session progression after it initiates TCP; sender-side `PATH_PROBING` is local
+between `STREAM_OPEN` and `STREAMING`. Any TLS/control failure goes directly to
+`CLOSED`: stop streams, release subscriber ownership, erase keys, and retain driver
+operation.
 
 The Apple output-server media receiver states are `IDLE -> PRIMING -> PLAYING -> REPRIMING`, then
 back to `IDLE` on stop/close. A successful `stream.start` triggers `PRIMING`; it
@@ -15,8 +16,8 @@ does not mean samples are audible. A valid packet never moves state from `IDLE`
 without control authorization. `PLAYING` can render concealment/silence on loss.
 
 ```text
-Win: discover configured server -> TCP/TLS -> hello -> bind -> open -> path challenge -> start
-Apple: advertise -> accept TLS -> hello -> bind -> open -> per-stream path challenge -> start
+Win: discover configured server -> TCP/TLS -> hello -> bind -> open -> PATH_CHALLENGE -> PATH_RESPONSE -> start
+Apple: advertise -> accept TLS -> hello -> bind -> open -> receive challenge -> response -> start
                        \-----------------------------------------------/
                               control owns all transitions
 UDP:             cannot create/change stream; only probes, audio, feedback
@@ -29,13 +30,15 @@ uniformly chosen in `[0, 250]` ms for first retry, then a multiplier of 1.5 to 2
 capped at 10 seconds. Reset backoff only after a session has streamed for 30 seconds.
 It must resolve the current mDNS/manual address again, perform TLS pin validation,
 and create a fresh session. It MUST NOT reuse session IDs, UDP keys, packet indices,
-stream IDs, jitter packets, outstanding probes, or an unknown old request outcome.
+stream IDs, source packets, outstanding probes, or an unknown old request outcome.
 
-Windows service restart generates a new bridge epoch and client session material.
+Windows service restart generates a new bridge epoch and client session material; it
+opens any replacement stream with a newly declared Windows source-timestamp boundary.
 The Apple output server generates a new `boot_id` on restart and may keep its
-long-term identity and mDNS instance. Windows detects a changed boot ID only after
-new authenticated hello; the Apple output server flushes all old media. Driver
-restart/format loss stops existing streams with a state event where possible. Apple
+long-term identity and mDNS instance. Windows detects a changed Apple `boot_id` only
+after new authenticated hello; the Apple media receiver flushes all old media after a
+new `stream.start` boundary. Driver restart/format loss stops existing streams with a
+state event where possible. Apple
 system-default output route/rate changes flush/reprime locally and keep control only
 if its output continues; otherwise feedback indicates loss and Windows stops after
 timeout. Such a local route change never changes `server_id` or requires Windows

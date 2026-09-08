@@ -41,18 +41,24 @@ Windows application
 | Component | Owns | Must not depend on |
 | --- | --- | --- |
 | Driver | Endpoint, render clock, bounded bridge, local counters | Sockets, TLS, codecs, UI, remote consumption |
-| Windows service | Configured-server selection, TCP client sessions, UDP keys, packetizer | Apple availability for driver progress |
-| Apple output server | Discovery, identity, TCP listener, UDP receive, playout clock | Arrival of one packet per output callback |
+| Windows control client / media sender | Configured-server selection, TCP client sessions, source timeline, UDP send keys, packetizer | Apple availability for driver progress |
+| Apple output server / media receiver | Discovery, identity, TCP listener, UDP receive keys, playout clock and jitter buffer | Arrival of one packet per output callback |
 | Windows Control Panel | Server selection, trust decisions, configuration, status | Participation in real-time processing |
 
 `WinDevice/` will contain Windows-only driver, service, and supporting UI/build
-code. `Mac Client/` will contain the macOS application; an iOS implementation follows
+code. `AppleOutputServer/` will contain the macOS application; an iOS implementation follows
 the same Apple output-server role while its app is active. When an iOS app cannot
 continue its listener or audio output under the operating system's lifecycle rules,
 it withdraws discovery and stops the active stream; Windows reconnects only after the
 app is available again. The protocol specification
 and cross-platform wire fixtures live under `docs/`; neither implementation is
 the authority for correcting a disagreement with this specification.
+
+In v1, **Windows control client** means the TCP-initiating Windows service and
+**Windows media sender** means that same service while sending Windows-to-Apple
+AUDIO. **Apple output server** means the TCP-listening macOS/iOS app and **Apple
+media receiver** means that app while receiving and playing AUDIO. Sender and receiver
+always describe a media direction, never an inferred TCP role.
 
 ## 3. Required invariants
 
@@ -94,13 +100,13 @@ manually may work over routed networks, but all v1 transport limits still apply.
 | `peer_id` | 52 lowercase unpadded base32 characters | SHA-256 of identity public key's DER SubjectPublicKeyInfo; persists with key and is never advertised |
 | `server_id` | Lowercase UUID with hyphens | CSPRNG installation identity for one Apple GhostMedia output server; persists across hostname, mDNS-label, address, and certificate renewal changes |
 | `endpoint_id` | Lowercase UUID with hyphens | Windows endpoint identity, persists across service restart |
-| `boot_id` | Lowercase UUID with hyphens | New random UUID each service process start |
-| `session_id` | 32 lowercase hex characters / 16 raw bytes | Windows CSPRNG; new per accepted hello |
-| `stream_id` | JSON unsigned 32-bit integer / network u32 | Windows allocates monotonically from 1 within session; never reused |
+| `boot_id` | Lowercase UUID with hyphens | Apple output-server CSPRNG; new for each Apple output-server process instance |
+| `session_id` | 32 lowercase hex characters / 16 raw bytes | Apple output-server CSPRNG; new for each accepted control session |
+| `stream_id` | JSON unsigned 32-bit integer / network u32 | Apple output server allocates monotonically from 1 within session when reserving a stream; never reused |
 | `key_epoch` | Unsigned 32-bit integer | Starts at 1 per stream direction; changes through the authenticated rekey transition |
 | `request id` | JSON unsigned 32-bit integer | Monotonic per request sender, beginning at 1 per TCP connection |
 | `sequence` | Unsigned 64-bit integer in UDP | Random start per stream direction and key epoch; never reused under its key |
-| `media_timestamp` | Unsigned 64-bit sample-frame count | Stream source clock; never wall-clock time |
+| `media_timestamp` | Unsigned 64-bit sample-frame count | Windows media sender's source-frame timeline after conversion to the negotiated network sample rate; never wall-clock time |
 | `monotonic_ns` | Decimal string | Nanoseconds in the sending process's monotonic clock domain |
 
 Names shown to users are mutable labels, never keys. Identical names do not imply
@@ -120,16 +126,24 @@ label, address, port, or renewed same-key certificate therefore cannot make Wind
 select a different configured server. Loss or intentional reset of the persisted
 server ID is a replacement-server event and requires local reconfiguration.
 
+Windows alone chooses initial source timestamps, advances them for every source frame
+including timestamped silence, and declares source discontinuities. The Apple media
+receiver may validate alignment, retain rendered timestamps, and flush/reprime on a
+declared or detected discontinuity, but MUST NOT invent or renumber the Windows source
+timeline.
+
 Monotonic clock origins differ across machines and process restarts. Suspend/resume
 invalidates timing estimates and forces a fresh session. Drivers use the operating
 system's appropriate monotonic/performance counter independently of the session.
 
 ## 6. Authority and transactions
 
-The Windows service is authoritative for endpoint availability and source audio. The
-Apple output server is authoritative for its current subscriber, stream allocation,
-negotiated state, local output availability, and actual playout statistics. Neither may fabricate the
-other's observations. Status distinguishes `control_connected`, `path_validated`,
+The Windows control client/media sender is authoritative for the Windows endpoint,
+source audio, source media timestamps, and sender-side path validation. The Apple
+output server/media receiver is authoritative for its current subscriber, stream
+allocation, negotiated state, local output availability, jitter/playout state, and
+actual rendered-timestamp statistics. Neither may fabricate the other's observations.
+Status distinguishes `control_connected`, `path_validated`,
 `stream_active`, and `audio_audible`; active packets do not prove audible output.
 
 Windows initiates all lifecycle operations. Either side can ping or close a session.
@@ -152,6 +166,6 @@ These are targets to measure, not guarantees inferred from transport choice:
 - Remote disappearance: driver continues indefinitely; network session is cleaned
   up within the heartbeat timeout when no valid control messages arrive.
 
-Scheduling, Windows mix periods, codec delay, Mac hardware buffers, and wireless
+Scheduling, Windows mix periods, codec delay, Apple hardware buffers, and wireless
 jitter all contribute. The specification requires reporting measurable components
 instead of presenting a single unverified latency value.
