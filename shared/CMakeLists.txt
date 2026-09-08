@@ -3,7 +3,8 @@ include(GNUInstallDirs)
 add_library(gm_core STATIC
     core/gm_control.cpp
     core/gm_core.cpp
-    core/gm_media.cpp)
+    core/gm_media.cpp
+    core/gm_state.cpp)
 
 add_library(GhostMedia::Core ALIAS gm_core)
 

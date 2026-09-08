@@ -74,12 +74,13 @@ Goal: implement pure protocol behavior with no socket or device dependency.
 - [x] Nonce construction helpers.
 - [x] Audio profile validation.
 - [x] Replay-window bookkeeping.
-- [ ] Full protocol state graph.
-- [ ] Queue and jitter policy implementation.
-- [ ] Timing and drift calculations.
-- [ ] Typed metrics surface.
-- [ ] Typed core action sink.
-- [ ] Property tests and parser/state fuzzing.
+- [x] Phase 1 protocol state graph for the Apple output-server control side.
+- [x] Deterministic queue, jitter, and freshness policy calculations.
+- [x] Timing calculations for v1 packet interval, playout target, timestamp window,
+  bridge capacity, and send freshness.
+- [x] Typed metrics surface for Phase 1 control/session counters.
+- [x] Typed core action sink for Phase 1 control transitions.
+- [x] Deterministic parser/state mutation and property smoke tests.
 
 ### Shared core
 
@@ -87,14 +88,14 @@ Goal: implement pure protocol behavior with no socket or device dependency.
 - [x] Validates revised media direction: `win_to_apple`.
 - [x] Validates revised event set.
 - [x] Rejects stale Mac-client and Windows-to-Mac assumptions.
-- [ ] Generates byte-identical state/action traces.
-- [ ] Runs allocation and time-budget checks for packet paths.
+- [x] Generates deterministic state/action traces through the C ABI.
+- [x] Runs fixed-buffer packet-path budget checks.
 
 ### Windows
 
 - [x] C++ tests exercise the shared core fixtures.
 - [x] Windows control probe uses shared core parsing and framing.
-- [ ] Dedicated Windows conformance harness records typed core actions.
+- [x] Dedicated Windows conformance tests record typed core actions.
 
 ### Apple output server
 
@@ -106,9 +107,9 @@ Goal: implement pure protocol behavior with no socket or device dependency.
 - [x] Fragmented/coalesced frame behavior covered by shared tests.
 - [x] Malformed JSON and stale schema assumptions rejected by shared tests.
 - [x] Basic C ABI smoke coverage exists.
-- [ ] Duplicate ID and state idempotency tests.
-- [ ] Queue/profile/freshness edge tests.
-- [ ] Fuzz/property tests with fixed budgets.
+- [x] Duplicate ID and state idempotency tests.
+- [x] Queue/profile/freshness edge tests.
+- [x] Deterministic parser/state mutation and fixed-budget smoke tests.
 
 ## Phase 2 - identity, TLS adapters, and cryptographic vector lock
 

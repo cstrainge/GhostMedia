@@ -46,6 +46,15 @@
 #define GM_AUDIO_PCM_S16LE_PAYLOAD_BYTES 960u
 #define GM_AUDIO_OPUS_MAX_PAYLOAD_BYTES 1128u
 #define GM_FEEDBACK_PAYLOAD_BYTES 32u
+#define GM_AUDIO_SAMPLE_RATE_HZ 48000u
+#define GM_RECEIVER_JITTER_CAPACITY_MS 300u
+#define GM_RECEIVER_JITTER_CAPACITY_BYTES 65536u
+#define GM_MEDIA_LOOKBEHIND_MS 120u
+#define GM_MEDIA_LOOKAHEAD_MS 250u
+#define GM_BRIDGE_CAPACITY_MS 100u
+#define GM_BRIDGE_FRESHNESS_MS 50u
+#define GM_SEND_CAPACITY_MS 40u
+#define GM_SEND_FRESHNESS_MS 20u
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,6 +123,36 @@ typedef enum gm_replay_result {
     GM_REPLAY_DUPLICATE = 2,
     GM_REPLAY_TOO_OLD = 3
 } gm_replay_result;
+
+typedef enum gm_control_session_role {
+    GM_CONTROL_SESSION_ROLE_APPLE_OUTPUT_SERVER = 1
+} gm_control_session_role;
+
+typedef enum gm_control_session_state {
+    GM_CONTROL_SESSION_STATE_CLOSED = 0,
+    GM_CONTROL_SESSION_STATE_TLS_READY = 1,
+    GM_CONTROL_SESSION_STATE_HELLO = 2,
+    GM_CONTROL_SESSION_STATE_BOUND = 3,
+    GM_CONTROL_SESSION_STATE_STREAM_OPEN = 4,
+    GM_CONTROL_SESSION_STATE_STREAMING = 5
+} gm_control_session_state;
+
+typedef enum gm_control_action_kind {
+    GM_CONTROL_ACTION_NONE = 0,
+    GM_CONTROL_ACTION_SEND_SESSION_HELLO_RESULT = 1,
+    GM_CONTROL_ACTION_SEND_TRANSPORT_BIND_RESULT = 2,
+    GM_CONTROL_ACTION_SEND_STREAM_OPEN_RESULT = 3,
+    GM_CONTROL_ACTION_SEND_STREAM_START_RESULT = 4,
+    GM_CONTROL_ACTION_SEND_STREAM_STOP_RESULT = 5,
+    GM_CONTROL_ACTION_SEND_STREAM_CLOSE_RESULT = 6,
+    GM_CONTROL_ACTION_SEND_STREAM_REKEY_RESULT = 7,
+    GM_CONTROL_ACTION_SEND_STATUS_RESULT = 8,
+    GM_CONTROL_ACTION_SEND_PING_RESULT = 9,
+    GM_CONTROL_ACTION_SEND_SESSION_CLOSE_RESULT = 10,
+    GM_CONTROL_ACTION_PATH_VALIDATED = 20,
+    GM_CONTROL_ACTION_SEND_ERROR_RESULT = 100,
+    GM_CONTROL_ACTION_SEND_ERROR_CLOSE = 101
+} gm_control_action_kind;
 
 typedef struct gm_bytes {
     const uint8_t *data;
@@ -207,6 +246,117 @@ typedef struct gm_replay_window {
     uint64_t bitmap[16];
 } gm_replay_window;
 
+typedef struct gm_control_session_config {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t role;
+    uint32_t apple_udp_port;
+    uint32_t stream_id;
+    uint32_t key_epoch;
+    uint32_t max_audio_subscribers;
+    uint32_t playout_target_ms_min;
+    uint32_t playout_target_ms_max;
+    uint8_t output_available;
+    uint8_t reserved[3];
+    char server_id[GM_CONTROL_UUID_BYTES + 1u];
+    char boot_id[GM_CONTROL_UUID_BYTES + 1u];
+    char session_id[GM_CONTROL_SESSION_ID_HEX_BYTES + 1u];
+} gm_control_session_config;
+
+typedef struct gm_control_session {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t role;
+    uint32_t state;
+    uint32_t last_request_id;
+    uint32_t windows_udp_port;
+    uint32_t apple_udp_port;
+    uint32_t stream_id;
+    uint32_t next_stream_id;
+    uint32_t key_epoch;
+    uint32_t initial_key_epoch;
+    uint32_t last_rekey_epoch;
+    uint32_t last_closed_stream_id;
+    uint32_t playout_target_ms;
+    uint64_t last_update_ns;
+    uint64_t valid_requests;
+    uint64_t rejected_requests;
+    uint64_t actions_emitted;
+    uint64_t state_conflicts;
+    uint64_t protocol_errors;
+    uint64_t streams_started;
+    uint64_t streams_stopped;
+    uint64_t streams_closed;
+    uint64_t rekeys_committed;
+    uint8_t path_validated;
+    uint8_t output_available;
+    uint8_t reserved[6];
+    gm_audio_profile profile;
+    char server_id[GM_CONTROL_UUID_BYTES + 1u];
+    char boot_id[GM_CONTROL_UUID_BYTES + 1u];
+    char session_id[GM_CONTROL_SESSION_ID_HEX_BYTES + 1u];
+    char first_media_timestamp[GM_CONTROL_DECIMAL_U64_MAX_BYTES + 1u];
+} gm_control_session;
+
+typedef struct gm_control_action {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t kind;
+    uint32_t response_id;
+    uint32_t status;
+    uint32_t session_state;
+    uint32_t udp_port;
+    uint32_t stream_id;
+    uint32_t key_epoch;
+    uint32_t playout_target_ms;
+    uint32_t packet_interval_us;
+    uint8_t terminal;
+    uint8_t reserved[3];
+    gm_audio_profile profile;
+    char server_id[GM_CONTROL_UUID_BYTES + 1u];
+    char boot_id[GM_CONTROL_UUID_BYTES + 1u];
+    char session_id[GM_CONTROL_SESSION_ID_HEX_BYTES + 1u];
+    char token[GM_CONTROL_TOKEN_MAX_BYTES + 1u];
+    char state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char path_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char output_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char session_stream_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char transport_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char first_media_timestamp[GM_CONTROL_DECIMAL_U64_MAX_BYTES + 1u];
+    char monotonic_ns[GM_CONTROL_DECIMAL_U64_MAX_BYTES + 1u];
+} gm_control_action;
+
+typedef struct gm_control_metrics {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint64_t valid_requests;
+    uint64_t rejected_requests;
+    uint64_t actions_emitted;
+    uint64_t state_conflicts;
+    uint64_t protocol_errors;
+    uint64_t streams_started;
+    uint64_t streams_stopped;
+    uint64_t streams_closed;
+    uint64_t rekeys_committed;
+} gm_control_metrics;
+
+typedef struct gm_audio_timing_plan {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t packet_interval_us;
+    uint32_t frames_per_packet;
+    uint32_t playout_target_ms;
+    uint32_t playout_target_frames;
+    uint32_t jitter_capacity_packets;
+    uint32_t jitter_capacity_bytes;
+    uint32_t lookbehind_frames;
+    uint32_t lookahead_frames;
+    uint32_t bridge_capacity_frames;
+    uint32_t bridge_freshness_frames;
+    uint32_t send_capacity_frames;
+    uint32_t send_freshness_frames;
+} gm_audio_timing_plan;
+
 GM_API const char *gm_status_string(gm_status status);
 GM_API gm_status gm_get_version(gm_core_version *out_version);
 GM_API gm_status gm_control_validate_json_text(gm_bytes json_text);
@@ -219,6 +369,11 @@ GM_API gm_status gm_media_decode_header(gm_bytes datagram, gm_media_header *out_
 GM_API gm_status gm_media_build_nonce(uint32_t key_epoch, uint64_t sequence, gm_mut_bytes output);
 GM_API gm_status gm_replay_window_init(gm_replay_window *window);
 GM_API gm_status gm_replay_window_accept(gm_replay_window *window, uint64_t sequence, uint32_t *out_result);
+GM_API gm_status gm_control_session_init(const gm_control_session_config *config, gm_control_session *session);
+GM_API gm_status gm_control_session_ingest(gm_control_session *session, gm_bytes json_text, uint64_t now_ns, gm_control_action *out_action);
+GM_API gm_status gm_control_session_mark_path_validated(gm_control_session *session, uint32_t stream_id, uint32_t key_epoch, gm_control_action *out_action);
+GM_API gm_status gm_control_session_get_metrics(const gm_control_session *session, gm_control_metrics *out_metrics);
+GM_API gm_status gm_audio_calculate_timing_plan(const gm_audio_profile *profile, uint32_t playout_target_ms, gm_audio_timing_plan *out_plan);
 
 #ifdef __cplusplus
 }
