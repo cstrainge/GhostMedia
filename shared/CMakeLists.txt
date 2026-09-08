@@ -1,5 +1,7 @@
 add_library(gm_core STATIC
-    core/gm_core.cpp)
+    core/gm_control.cpp
+    core/gm_core.cpp
+    core/gm_media.cpp)
 
 add_library(GhostMedia::Core ALIAS gm_core)
 
