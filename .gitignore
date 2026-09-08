@@ -1,6 +1,10 @@
 out/
 build/
+.build*/
+.swiftpm/
 .vs/
+xcuserdata/
+*.xcuserstate
 *.user
 *.suo
 *.obj
