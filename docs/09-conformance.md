@@ -23,7 +23,7 @@ An implementation conforms to v1 only when it passes shared cross-platform tests
 7. Driver-bridge ABI tests verify service-SID open/attach authorization, rejection
    of arbitrary users/admin data-handle access, single-reader ownership, fixed-size
    IOCTL validation, read-only mappings, non-inheritable/non-writable mapping
-   handles, acquire/release publication, stale/duplicated handle epoch isolation,
+   handles, odd/even interlocked commit publication, stale/duplicated handle epoch isolation,
    close/cancellation races, service death, PnP removal, and bridge reattach.
 8. Fault tests kill/restart the service, stop the Mac, blackhole UDP, delay/reorder/
    duplicate packets, fill all queues, alter network interface/address/route/firewall
@@ -43,6 +43,16 @@ An implementation conforms to v1 only when it passes shared cross-platform tests
     receipt as audible output.
 11. Resource tests show queue/datagram/frame limits bound memory and that logs and
     diagnostic artifacts omit audio and secrets.
+12. Authorization tests prove that an approved audio peer cannot begin media until
+    the companion UI acknowledges the visible indicator, that `Stop stream` ends
+    media promptly, that revocation closes sessions, and that headless streaming
+    requires explicit local enablement plus its required local audit record.
+13. Server-identity tests prove first-run CSPRNG generation, persistent reuse across
+    service restart and network-name/address changes, non-advertisement before TLS,
+    client rejection of an authenticated `server_id` mismatch, and controlled reset
+    behavior after image-clone or explicit identity-reset simulation. They also prove
+    startup fails closed when protected identity storage is unavailable and that a
+    same-installation backup restore retains the ID without bypassing SPKI pinning.
 
 Tests use deterministic fake clocks, seeded cryptographic test vectors only, and
 separate production CSPRNG tests. Production keys/packets never become fixtures.
@@ -53,7 +63,7 @@ separate production CSPRNG tests. Production keys/packets never become fixtures.
 Mac    mDNS browse -> Windows service record
 Mac    TLS 1.3 mutual-auth connect, ALPN ghostmedia/1
 Mac -> Win  session.hello(id=1, udp_port=49152)
-Win -> Mac  result(session_id, udp_port=51838, capabilities)
+Win -> Mac  result(server_id, session_id, udp_port=51838, capabilities)
 Mac -> Win  transport.bind(id=2, udp_port=49152)
 Win -> Mac  result(path_state=bound)
 Mac -> Win  stream.open(id=3, PCM 48k/stereo/240, target=30ms)

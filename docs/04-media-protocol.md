@@ -45,12 +45,16 @@ version, kind, flags, reserved bytes, authorized IP:port, session/stream/epoch,
 direction, declared length, and replay eligibility. A failed tag is a silent drop.
 Unknown or mismatched input creates no state, response, worker job, or log entry.
 
-Unknown/mismatched tuples together receive at most 256 datagrams or 256 KiB per
-rolling second (burst 512/512 KiB), with 16 datagrams per source per second. An
+The receive loop first performs only fixed-size header and source-tuple classification.
+It reserves at least 75 percent of packet-processing iterations and AEAD budget for
+currently path-authorized tuples; unknown or mismatched tuples cannot consume that
+reserve. Unknown/mismatched tuples together receive at most 128 datagrams or 128 KiB
+per rolling second (burst 256/256 KiB), with 8 datagrams per source per second. An
 authorized stream receives at most 500 datagrams per second; all authorized streams
 together at most 2,000. A tuple is also capped at 300 datagrams or 360 KiB per
 second (burst 600/720 KiB). Apply all limits before AEAD, including invalid-tag and
-replayed packets, and schedule authorized streams fairly.
+replayed packets, and schedule authorized streams fairly. Classification uses fixed
+storage and never creates a tuple entry for an unknown packet.
 
 ## 2. Path validation
 
@@ -113,9 +117,13 @@ seconds stops that stream with `REMOTE_OUTPUT_LOST` but leaves its session usabl
 
 After authenticated profile validation, insert by media timestamp. Keep the first
 authenticated packet for a timestamp; drop packets over 120 ms late or 250 ms early.
-The jitter buffer holds at most 15 packets, 300 ms, or 18 KiB per stream, whichever
-comes first. An overflowing packet is dropped without moving playout. Start, stop,
-close, rekey, format change, or excessive gap flushes jitter, decoder, and playout.
+The jitter buffer holds at most 300 ms, `ceil(300 ms / packet_interval)` packets,
+or 64 KiB of encoded/PCM packet storage per stream, whichever comes first. This
+supports the maximum 120 ms target plus reordering headroom for both v1 profiles.
+An overflowing packet is dropped without moving playout. Start, stop, close, format
+change, or excessive gap flushes jitter, decoder, and playout. Rekey retains buffered
+audio and accepts both old and new epochs during the defined overlap; it does not
+flush or reprime a healthy stream.
 
 At each expected timestamp, render if present; otherwise conceal and advance without
 waiting or rewind. PCM concealment is a 5 ms decay then silence; Opus uses PLC for

@@ -82,12 +82,62 @@ critical extensions are invalid.
 
 The canonical peer identifier is `SHA-256(SPKI-DER)`, encoded lowercase base32 without
 padding. It is never advertised and appears only in the authenticated pairing UI.
+A Windows service also generates `server_id`, a CSPRNG UUIDv4, on its first successful
+initialization. It persists the value in service-identity-protected local storage and
+never derives it from the computer name, account, mDNS label, address, port, hardware
+serial, or certificate. It MUST NOT advertise `server_id` in mDNS, logs, or an
+unauthenticated control response. The service returns it only after mutual TLS and
+local trust authorization. A Mac treats it as a stable server-selection value, never
+as proof of identity; the pinned SPKI and permissions remain the trust decision.
+Generation and persistence MUST complete atomically before the service listens,
+advertises, or accepts a control connection. If protected persistence cannot be
+established or read, the service MUST fail closed rather than operate with a transient
+identity.
+
+Installation from a cloned system image MUST regenerate `server_id` before enabling
+the service. Install/repair tooling exposes an explicit `reset server identity`
+operation that requires local administrator confirmation, stops active streams,
+generates a new UUID, and records that existing client configurations must be paired
+or selected again. The implementation must not claim it can reliably detect every
+disk/image clone automatically.
+
+The identity lifecycle is explicit. If the protected value is absent but protected
+storage is working, the service treats that as identity loss: it generates and
+persists a new value, does not retain the old value as an alias, and requires every
+configured Mac to be locally updated and paired/selected again. If storage is
+unreadable, corrupted, or unavailable, the service fails closed until a local
+administrator explicitly repairs storage or resets server identity; it must not guess
+whether an old identity is still valid. A deliberate reset has the same client-facing
+result as identity loss.
+Restoring the protected value from a backup restores the original server identity
+only when that backup represents the same physical/logical server installation; it
+does not require reconfiguration on clients that already store that value. It does
+not bypass SPKI pin validation or restore a replaced peer key. Restoring the same
+backup onto a different server, or any cloned image, MUST regenerate the value before
+network service is enabled, since two simultaneous installations MUST NOT share a
+`server_id`. If a client sees an authenticated but unexpected value, it MUST close
+the connection before binding or streaming and require local user action to replace
+its configured server identity.
+
 A trust record is keyed by the exact 32-byte SPKI digest and contains only locally
 assigned label, timestamps, and permissions; it contains no address. Permissions are
 local policy, not claims: `connect`, `view_status`, `receive_system_audio`,
 `provide_microphone`, and `provide_camera`. All but `connect` default denied.
 Forgetting or revoking `connect` immediately closes sessions, invalidates media keys,
 and removes paths.
+
+`receive_system_audio` is persistent authorization, not a hidden background grant.
+Every active stream MUST produce a local, user-visible streaming indicator that names
+the locally assigned peer label and offers `Stop stream` and `Revoke peer` actions.
+Because a Windows service cannot reliably display user-session UI, it requests this
+indicator from a signed-in companion UI and waits for that UI's ready acknowledgement
+before the first audio packet. A service without a companion UI rejects `stream.open`
+unless a local administrator has explicitly enabled headless streaming; headless mode
+records active-stream state in the local event log and configuration UI. A local user
+may globally disable new stream starts; that setting is persistent, defaults enabled
+after an explicit pairing grant, and causes new `stream.open` requests to return
+`FORBIDDEN`. V1 does not require approval for every reconnect, but its persistent
+authorization is always inspectable and revocable.
 
 Unpaired devices may discover one another but cannot obtain a TLS session. Pairing
 is deliberately not a network protocol in v1. Before connecting, each side displays
@@ -127,7 +177,11 @@ is presented. For every peer certificate, validate in this order:
    MUST NOT grant or widen authorization.
 
 A TLS library unable to enforce this leaf-only validation, including rejecting system
-roots, MUST NOT be used. Certificate rotation requires explicit new pairing.
+roots, MUST NOT be used. Renewing a leaf certificate with the exact same validated
+SPKI remains trusted if it still satisfies the v1 leaf profile and validity rules.
+Replacing the SPKI is an identity rotation and requires explicit bilateral local
+pairing. Certificate renewal MUST NOT silently widen permissions or change the
+trust-record label.
 
 ## 6. Admission and resource limits
 

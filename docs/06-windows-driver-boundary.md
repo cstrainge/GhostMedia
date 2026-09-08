@@ -44,17 +44,25 @@ may read the ring and wait for the event outside real-time work; it cannot modif
 producer indices, block payloads, or driver state. The driver remains the only
 writer.
 
-Before every publication, the driver writes a complete block then performs a release
-store of its sequence/index. The service reads an acquired index, copies a complete
-block to private memory, then rechecks epoch and sequence before accepting it. A
-changed epoch, sequence mismatch, malformed descriptor, or torn/unavailable mapping
-causes the service to drop that block and reopen the bridge; it never retries a
-kernel operation from an audio callback. `IRP_MJ_CLEANUP`, close, service death, and
-PnP removal atomically invalidate the epoch, clear the reader, signal waiters, and
-return the ring to no-reader overwrite/discard. All bridge IOCTLs verify both the
-opening process identity and current epoch; an old file object is revoked on detach.
-An old mapping can expose only its former epoch's contents because the driver never
-reuses its backing section for a subsequent attachment.
+The mapped ring uses fixed, naturally aligned 64-bit commit words and Windows
+interlocked primitives; generic cross-process C++ atomics are not the ABI. A block's
+commit word is zero when empty, odd while the driver writes it, and an even monotonic
+publication value when complete. The driver uses `InterlockedExchange64` to publish
+the odd value, writes header and payload, executes `KeMemoryBarrier`, then publishes
+the even value with `InterlockedExchange64`. The value never wraps during an epoch.
+The service obtains a value with `InterlockedCompareExchange64`, accepts only a
+nonzero even value, copies into private memory, executes a full acquire barrier, and
+reads the commit word again. It accepts the copy only if both values match. A changed
+epoch, odd/mismatched commit word, malformed descriptor, or torn/unavailable mapping
+causes a block drop and bridge reopen; it never retries a kernel operation from an
+audio callback.
+
+`IRP_MJ_CLEANUP`, close, service death, and PnP removal atomically invalidate the
+epoch, clear the reader, signal waiters, and return the ring to no-reader
+overwrite/discard. All bridge IOCTLs verify both the opening process identity and
+current epoch; an old file object is revoked on detach. An old mapping can expose
+only its former epoch's contents because the driver never reuses its backing section
+for a subsequent attachment.
 
 The fixed ABI MUST provide:
 
@@ -71,11 +79,10 @@ The fixed ABI MUST provide:
 
 Choose and document one local PCM representation before implementation; it may
 differ from network PCM. Every block includes format ID, frame count, monotonic
-presentation marker, source frame index, bridge epoch, sequence, and flags. Shared
-indices publish with acquire/release semantics. The service validates descriptors
-as an untrusted boundary despite controlling the expected client process. Block
-capacity, frame count, and format are immutable per epoch; the driver does not parse
-a variable descriptor on the render path.
+presentation marker, source frame index, bridge epoch, publication value, and flags.
+The service validates descriptors as an untrusted boundary despite controlling the
+expected client process. Block capacity, frame count, and format are immutable per
+epoch; the driver does not parse a variable descriptor on the render path.
 
 The endpoint remains a normal Windows device with zero bridge readers. It consumes
 audio according to Windows endpoint rules and never reports a render fault solely

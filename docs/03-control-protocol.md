@@ -99,7 +99,7 @@ only the following per-request fields:
 
 | Request | Result fields (all required unless noted) |
 | --- | --- |
-| `session.hello` | `version`, `role`, `session_id`, `boot_id`, `udp_port`, `capabilities`, `limits` |
+| `session.hello` | `version`, `role`, `server_id`, `session_id`, `boot_id`, `udp_port`, `capabilities`, `limits` |
 | `transport.bind` | `udp_port`, `path_state` |
 | `stream.open` | `stream_id`, `key_epoch`, `profile`, `packet_interval_us`, `source_media_timestamp`, `path_state` |
 | `stream.rekey` | `stream_id`, `key_epoch`, `state` |
@@ -109,7 +109,8 @@ only the following per-request fields:
 | `ping` | `token`, `monotonic_ns` |
 | `session.close` | `state` |
 
-`stream_id` and `key_epoch` are integers in 1..4,294,967,295; durations in
+`server_id` is canonical lowercase UUID text and is present only in the authenticated
+Windows `session.hello` result. `stream_id` and `key_epoch` are integers in 1..4,294,967,295; durations in
 microseconds/milliseconds are non-negative integers within u32. In the hello
 result, `capabilities` has exactly boolean `audio_send`, `audio_receive`,
 `microphone`, and `camera`, plus `audio_profiles`: an array of 1 through 2 closed
@@ -151,7 +152,7 @@ check, and this schema validation have all succeeded.
 {
   "v": 1, "id": 1, "type": "result",
   "result": {
-    "version": 1, "role": "win-device",
+    "version": 1, "role": "win-device", "server_id": "<uuid>",
     "session_id": "<32 lowercase hex>", "boot_id": "<uuid>",
     "udp_port": 51838, "capabilities": {"audio_send": true, "audio_receive": false,
       "microphone": false, "camera": false, "audio_profiles": [
@@ -168,7 +169,10 @@ material until an authorized stream is opened, and retains the session for the T
 connection lifetime. `audio_send:false` means no driver/endpoint is presently
 usable; the connection remains usable for status. The Mac MUST call
 `transport.bind` after hello even though ports were exchanged: that commits the
-tuple. Path validation is per stream and begins only after authorized `stream.open`.
+tuple. Before any bind or stream request, the Mac compares returned `server_id` to
+its configured server ID; a mismatch closes TLS, records no new trust data, and
+continues discovery. Path validation is per stream and begins only after authorized
+`stream.open`.
 
 ## 4. Requests
 
@@ -244,14 +248,18 @@ plus one), for example
 {"v":1,"id":8,"type":"stream.rekey","stream_id":1,"key_epoch":2}
 ```
 
-Windows verifies that exact next value, stops pacing, flushes its capture to
-network queue, derives the new epoch's directional keys, starts a fresh bounded
-path challenge, and returns `state:"probing"`. It never sends audio at the new
-epoch until `event.path.validated` for that stream; the Mac then calls
-`stream.start`. A rekey request with another value is `STATE_CONFLICT`; a duplicate
-of the committed request returns the same result. The old epoch is accepted only
-for its 5-second path transition grace and is then erased. Failure to complete the
-transition before the old epoch limit stops and closes the stream.
+Windows verifies that exact next value, derives the new epoch's directional keys,
+starts a fresh bounded path challenge, and returns `state:"probing"` while the old
+epoch continues paced audio. It never sends audio at the new epoch until
+`event.path.validated` for that stream. On validation it switches epochs at the next
+packet boundary, preserving media-timestamp continuity, and emits
+`event.stream.rekeyed` with `stream_id`, `old_key_epoch`, `key_epoch`, and
+`first_media_timestamp`. The Mac has already derived the requested epoch and accepts
+both epochs during the five-second overlap without flushing its jitter buffer or
+calling `stream.start`. A rekey request with another value is `STATE_CONFLICT`; a
+duplicate committed request returns the same result. The old epoch is erased after
+the overlap. Failure to complete the transition before the old epoch limit stops and
+closes the stream.
 
 ### 4.5 `status.get`, `ping`, and `session.close`
 
@@ -286,6 +294,7 @@ endpoint states and a fixed reason enumeration, never a platform error:
 | `event.stream.started` | `stream_id`, `first_media_timestamp` | Send path committed |
 | `event.stream.stopped` | `stream_id`, `reason` | Sender stopped; receiver flushes this stream |
 | `event.stream.rekey_required` | `stream_id`, `key_epoch`, `deadline_monotonic_ns` | Mac must initiate the next epoch |
+| `event.stream.rekeyed` | `stream_id`, `old_key_epoch`, `key_epoch`, `first_media_timestamp` | Sender switched at a continuous media boundary |
 | `event.driver.state` | `state`, `reason` | Endpoint availability changed |
 | `event.session.expiring` | `reason`, `deadline_monotonic_ns` | reconnect before key/session limit |
 

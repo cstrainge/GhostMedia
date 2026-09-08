@@ -77,6 +77,7 @@ manually may work over routed networks, but all v1 transport limits still apply.
 | Name | Encoding | Scope and assignment |
 | --- | --- | --- |
 | `peer_id` | 52 lowercase unpadded base32 characters | SHA-256 of identity public key's DER SubjectPublicKeyInfo; persists with key and is never advertised |
+| `server_id` | Lowercase UUID with hyphens | CSPRNG installation identity for one Windows GhostMedia service; persists across hostname, mDNS-label, address, and certificate renewal changes |
 | `endpoint_id` | Lowercase UUID with hyphens | Windows endpoint identity, persists across service restart |
 | `boot_id` | Lowercase UUID with hyphens | New random UUID each service process start |
 | `session_id` | 32 lowercase hex characters / 16 raw bytes | Windows CSPRNG; new per accepted hello |
@@ -92,6 +93,17 @@ identical devices. UUIDs are generated using a cryptographically secure random
 source with UUID version/variant bits. The peer identifier is an authenticated
 pairing-only value; hexadecimal IDs have no prefix or separators unless UUID syntax
 is explicitly required.
+
+`server_id` is the client's stable configured-server selector, not an authorization
+credential or network address. A Mac stores it alongside the locally approved peer
+identity. On the first successful authorized session after local pairing, the Mac
+atomically binds the authenticated hello's `server_id` to that approved SPKI. On
+every later connection, discovery finds candidate routes and the Mac accepts a
+candidate only when both TLS pin validation succeeds and its authenticated
+`server_id` equals the configured value. A changed computer name, DNS-SD instance
+label, address, port, or renewed same-key certificate therefore cannot make the Mac
+select a different configured server. Loss or intentional reset of the persisted
+server ID is a replacement-server event and requires local reconfiguration.
 
 Monotonic clock origins differ across machines and process restarts. Suspend/resume
 invalidates timing estimates and forces a fresh session. Drivers use the operating

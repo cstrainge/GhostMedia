@@ -73,7 +73,10 @@ gm_status gm_stream_next_playout(gm_stream *, uint64_t now_ns, gm_pcm_buffer *,
 Every ABI structure begins with `struct_size` and `abi_version`. Use fixed-width
 types, caller-owned spans/buffers, explicit `GM_BUFFER_TOO_SMALL`, status enums,
 and no exception crossing. New fields append only. The core retains neither a
-callback nor a supplied buffer after the call returns. Handles are thread-affine
+callback nor a supplied buffer after the call returns. Action callbacks MUST NOT
+reenter the same session or stream handle. The caller serializes each handle on one
+executor, preserves core action order when queueing platform work, and reports any
+asynchronous completion through a later explicit core call. Handles are thread-affine
 unless their header says otherwise. Packet and real-time entry points must work from
 fixed caller buffers without allocation.
 
@@ -87,7 +90,7 @@ never receives a private key, certificate, or TLS handle.
 | --- | --- | --- |
 | G0 protocol | Schemas, byte order, limits, errors, state graph | Tagged protocol revision/change log |
 | G1 ABI | Ownership, struct layout/versioning, thread rules, action/error mapping | `gm_core.h` and ABI tests in C++ and Swift |
-| G2 crypto | SPKI form, exporter context, directions, epoch/sequence, nonce/AAD, tags | Positive and negative machine-readable vectors |
+| G2 crypto/identity | SPKI form, server ID lifecycle, exporter context, directions, epoch/sequence, nonce/AAD, tags | Positive and negative machine-readable vectors |
 | G3 lifecycle | hello/bind/open/path/start/stop/rekey/close and idempotency | Generated state-table tests |
 | G4 timing | timestamps, drops, discontinuity, prime, concealment, drift units | Deterministic fake-clock traces |
 | G5 transport | mDNS exposure, TLS rejection, socket tuple, interface loss | Two-host integration traces |
@@ -110,17 +113,22 @@ Windows service and WDK driver stubs; fixture tooling.
 fixture format, protocol change log, and header-size/schema linting.
 
 **Windows:** pin MSVC, SDK, WDK, CMake/Ninja; compile empty service/driver projects.
-Do not install a driver.
+Do not install a driver. Build a TLS feasibility spike that creates the exact Ed25519
+leaf, performs mutually authenticated TLS 1.3, rejects system roots/extra chains,
+and exports the required context-bound secret.
 
 **macOS:** pin Xcode/Swift; import the empty C module from a Swift CLI receiver.
+Run the same TLS feasibility spike with Keychain identity storage and the intended
+Network.framework or lower-level TLS adapter.
 
 **Synchronization:** satisfy G0. Both owners tag the same protocol revision.
 
 **Exit tests:** Windows and macOS build the core stub; Swift calls a version function;
-the fixture reader round-trips one known fixture.
+the fixture reader round-trips one known fixture; the two TLS spikes complete the
+exact v1 handshake and produce identical exporter test output.
 
 **Risks/traps:** WDK drift, developer-local SDK paths, C++ ABI leaking into Swift,
-and hand-edited generated vectors.
+TLS APIs that cannot enforce the required policy, and hand-edited generated vectors.
 
 **Deliverable:** reproducible empty builds and ABI skeleton.
 
@@ -161,17 +169,22 @@ and vector corpus.
 
 **Shared core:** own exporter-context construction, key/nonce/AAD length checks,
 header serialization, replay logic, and epoch lifecycle. Use a vetted AES-256-GCM
-provider through a narrow interface; do not implement TLS/certificate parsing.
+provider through a narrow interface; do not implement TLS/certificate parsing. The
+first shipped implementation advertises PCM only. Opus remains disabled until a
+pinned shared decoder/PLC implementation or byte-identical codec-adapter contract
+passes golden decode and loss-concealment fixtures on both platforms.
 
-**Windows:** service identity key, self-signed Ed25519 leaf, local trust records, and
-a TLS adapter that enforces the exact leaf-only mutual-auth/exporter policy.
+**Windows:** service identity key, self-signed Ed25519 leaf, persistent CSPRNG server
+ID, local trust records, and a TLS adapter that enforces the exact leaf-only
+mutual-auth/exporter policy.
 
 **macOS:** equivalent Keychain/trust adapter and TLS adapter. If Network.framework
 cannot expose the mandated validation/exporter behavior, use a vetted lower-level
 TLS library behind the same interface; never weaken the protocol to fit an API.
 
-**Synchronization:** satisfy G2. Publish vectors for peer ID, exporter input, epoch,
-direction, nonce, header, AAD, ciphertext, tag, replay edges, and path failure.
+**Synchronization:** satisfy G2. Publish vectors for peer ID, server-ID encoding and
+mismatch handling, exporter input, epoch, direction, nonce, header, AAD, ciphertext,
+tag, replay edges, and path failure.
 Each side must run the other side's vectors.
 
 **Exit tests:** bad leaf/pin/revocation, exporter match, altered header/tag/ciphertext,
@@ -207,7 +220,8 @@ agree on mDNS privacy, tuple/interface selection, reconnect, and timestamp input
 
 **Exit tests:** loopback, two-host IPv4, IPv6 link-local scope, Wi-Fi loss/reorder/
 duplicate injection, TLS/UDP flood, path expiry, rekey, service restart, receiver
-loss, interface loss, and simulated 30-minute epoch rollover.
+loss, interface loss, simulated 30-minute epoch rollover, companion-indicator
+acknowledgement, local stop/revoke, and explicitly enabled headless mode.
 
 **Risks/traps:** testing only localhost, wrong IPv6 scope, socket source address
 drift, mDNS API differences, and transport threads calling future callback code.
@@ -281,8 +295,8 @@ fixed section/event, PnP/power handling, ETW, Driver Verifier harness.
 **Shared core:** none in the driver. Userspace uses the existing core unchanged.
 
 **Windows driver/device:** implement document 06 precisely: preallocated blocks;
-one authorized service-SID handle; read-only service mapping; release/acquire
-publication; epoch invalidation on close, service death, PnP removal, and format
+one authorized service-SID handle; read-only service mapping; odd/even interlocked
+commit publication; epoch invalidation on close, service death, PnP removal, and format
 change; no allocation, network, or wait in the render path.
 
 **Windows userspace:** replace simulator with bridge client. On epoch change,

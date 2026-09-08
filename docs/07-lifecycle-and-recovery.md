@@ -76,6 +76,7 @@ limits always override attempts to avoid an interruption.
 | driver bridge capacity / freshness threshold | 100 ms / 50 ms; discard oldest complete data above freshness threshold |
 | service send capacity / freshness threshold | 40 ms / 20 ms; discard oldest complete data above freshness threshold |
 | receiver target buffer | 15..120 ms; default 30 ms |
+| receiver jitter capacity | 300 ms, `ceil(300 ms / packet_interval)` packets, and 64 KiB per stream |
 | accepted media lookbehind/lookahead | 120/250 ms |
 | UDP datagram | 80..1,500 bytes |
 | GCM epoch / sequence lifetime | rekey before 30 minutes, 2^32 packets, or sequence exhaustion |
