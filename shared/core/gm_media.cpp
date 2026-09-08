@@ -56,15 +56,15 @@ bool validate_media_header_fields(const gm_media_header &header) {
 
     switch (header.kind) {
     case GM_MEDIA_KIND_AUDIO:
-        return header.direction == GM_MEDIA_DIRECTION_WIN_TO_MAC && header.payload_length > 0u;
+        return header.direction == GM_MEDIA_DIRECTION_WIN_TO_APPLE && header.payload_length > 0u;
     case GM_MEDIA_KIND_PATH_CHALLENGE:
-        return header.direction == GM_MEDIA_DIRECTION_WIN_TO_MAC && header.media_timestamp == 0u &&
+        return header.direction == GM_MEDIA_DIRECTION_WIN_TO_APPLE && header.media_timestamp == 0u &&
                header.payload_length == 12u;
     case GM_MEDIA_KIND_PATH_RESPONSE:
-        return header.direction == GM_MEDIA_DIRECTION_MAC_TO_WIN && header.media_timestamp == 0u &&
+        return header.direction == GM_MEDIA_DIRECTION_APPLE_TO_WIN && header.media_timestamp == 0u &&
                header.payload_length == 12u;
     case GM_MEDIA_KIND_FEEDBACK:
-        return header.direction == GM_MEDIA_DIRECTION_MAC_TO_WIN && header.media_timestamp == 0u &&
+        return header.direction == GM_MEDIA_DIRECTION_APPLE_TO_WIN && header.media_timestamp == 0u &&
                header.payload_length == GM_FEEDBACK_PAYLOAD_BYTES;
     default:
         return false;

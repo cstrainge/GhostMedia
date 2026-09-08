@@ -106,7 +106,7 @@ void test_control_json_limits() {
 void test_control_message_parsing() {
     gm_control_message_info message{sizeof(gm_control_message_info)};
     check_status(gm_control_parse_message(
-                     bytes_from_cstr("{\"v\":1,\"id\":1,\"type\":\"session.hello\",\"role\":\"mac-client\","
+                     bytes_from_cstr("{\"v\":1,\"id\":1,\"type\":\"session.hello\",\"role\":\"win-client\","
                                      "\"client_name\":\"Living Room Mac\",\"versions\":[2,1],\"udp_port\":49152}"),
                      &message),
                  GM_OK, "session.hello parses");
@@ -116,11 +116,17 @@ void test_control_message_parsing() {
     check(message.udp_port == 49152u, "hello UDP port is reported");
     check(message.versions_count == 2u && message.versions[0] == 2u && message.versions[1] == 1u,
           "hello versions are reported");
-    check(std::strcmp(message.role, "mac-client") == 0, "hello role is copied");
+    check(std::strcmp(message.role, "win-client") == 0, "hello role is copied");
     check(std::strcmp(message.client_name, "Living Room Mac") == 0, "hello name is copied");
 
     check_status(gm_control_parse_message(
                      bytes_from_cstr("{\"v\":1,\"id\":1,\"type\":\"session.hello\",\"role\":\"mac-client\","
+                                     "\"client_name\":\"x\",\"versions\":[1],\"udp_port\":1}"),
+                     &message),
+                 GM_BAD_MESSAGE, "old Mac client role is rejected");
+
+    check_status(gm_control_parse_message(
+                     bytes_from_cstr("{\"v\":1,\"id\":1,\"type\":\"session.hello\",\"role\":\"win-client\","
                                      "\"client_name\":\"x\",\"versions\":[1,2],\"udp_port\":1}"),
                      &message),
                  GM_BAD_MESSAGE, "ascending versions are rejected");
@@ -140,7 +146,7 @@ void test_control_message_parsing() {
           "session id is copied");
 
     check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":3,\"type\":\"stream.open\","
-                                                         "\"kind\":\"audio\",\"direction\":\"win_to_mac\","
+                                                         "\"kind\":\"audio\",\"direction\":\"win_to_apple\","
                                                          "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,"
                                                          "\"channels\":2,\"channel_layout\":\"stereo\",\"frames_per_packet\":240},"
                                                          "\"playout_target_ms\":30}"),
@@ -153,10 +159,30 @@ void test_control_message_parsing() {
     check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":3,\"type\":\"stream.open\","
                                                          "\"kind\":\"audio\",\"direction\":\"win_to_mac\","
                                                          "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,"
+                                                         "\"channels\":2,\"channel_layout\":\"stereo\",\"frames_per_packet\":240},"
+                                                         "\"playout_target_ms\":30}"),
+                                          &message),
+                 GM_BAD_MESSAGE, "old win_to_mac direction is rejected");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":3,\"type\":\"stream.open\","
+                                                         "\"kind\":\"audio\",\"direction\":\"win_to_apple\","
+                                                         "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,"
                                                          "\"channels\":2,\"channel_layout\":\"stereo\",\"frames_per_packet\":480},"
                                                          "\"playout_target_ms\":30}"),
                                           &message),
                  GM_BAD_MESSAGE, "wrong PCM packet duration is rejected");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":4,\"type\":\"stream.start\","
+                                                         "\"stream_id\":1,\"first_media_timestamp\":\"240\"}"),
+                                          &message),
+                 GM_OK, "stream.start parses with sender timestamp");
+    check(message.kind == GM_CONTROL_REQUEST_STREAM_START && std::strcmp(message.first_media_timestamp, "240") == 0,
+          "stream.start timestamp is copied");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":4,\"type\":\"stream.start\","
+                                                         "\"stream_id\":1}"),
+                                          &message),
+                 GM_BAD_MESSAGE, "stream.start without sender timestamp is rejected");
 
     check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":4,\"type\":\"stream.rekey\","
                                                          "\"stream_id\":1,\"key_epoch\":2}"),
@@ -179,12 +205,94 @@ void test_control_message_parsing() {
                  GM_OK, "error response schema parses");
     check(message.kind == GM_CONTROL_RESPONSE_ERROR, "error response kind is reported");
 
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":6,\"type\":\"result\","
+                                                         "\"result\":{\"version\":1,\"role\":\"apple-output-server\","
+                                                         "\"server_id\":\"01234567-89ab-cdef-0123-456789abcdef\","
+                                                         "\"session_id\":\"00112233445566778899aabbccddeeff\","
+                                                         "\"boot_id\":\"11111111-2222-3333-4444-555555555555\","
+                                                         "\"udp_port\":49152,"
+                                                         "\"capabilities\":{\"audio_send\":false,\"audio_receive\":true,"
+                                                         "\"microphone\":false,\"camera\":false,\"audio_profiles\":["
+                                                         "{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,\"channels\":2,"
+                                                         "\"channel_layout\":\"stereo\",\"frames_per_packet\":240}]},"
+                                                         "\"limits\":{\"max_audio_subscribers\":1,\"playout_target_ms_min\":15,"
+                                                         "\"playout_target_ms_max\":120}}}"),
+                                          &message),
+                 GM_OK, "Apple output server hello result parses");
+    check(message.kind == GM_CONTROL_RESPONSE_RESULT && message.udp_port == 49152u,
+          "hello result UDP port is reported");
+    check(std::strcmp(message.role, "apple-output-server") == 0 &&
+              std::strcmp(message.server_id, "01234567-89ab-cdef-0123-456789abcdef") == 0 &&
+              std::strcmp(message.session_id, "00112233445566778899aabbccddeeff") == 0 &&
+              std::strcmp(message.boot_id, "11111111-2222-3333-4444-555555555555") == 0,
+          "hello result identifiers are copied");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":6,\"type\":\"result\","
+                                                         "\"result\":{\"udp_port\":51838,\"path_state\":\"bound\"}}"),
+                                          &message),
+                 GM_OK, "transport.bind result schema parses");
+    check(message.udp_port == 51838u && std::strcmp(message.path_state, "bound") == 0,
+          "transport.bind result fields are copied");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":6,\"type\":\"result\","
+                                                         "\"result\":{\"udp_port\":51838,\"path_state\":\"probing\"}}"),
+                                          &message),
+                 GM_BAD_MESSAGE, "transport.bind result rejects probing path state");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":7,\"type\":\"result\","
+                                                         "\"result\":{\"stream_id\":1,\"key_epoch\":1,"
+                                                         "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,"
+                                                         "\"channels\":2,\"channel_layout\":\"stereo\",\"frames_per_packet\":240},"
+                                                         "\"packet_interval_us\":5000,\"path_state\":\"probing\"}}"),
+                                          &message),
+                 GM_OK, "stream.open result schema parses");
+    check(message.kind == GM_CONTROL_RESPONSE_RESULT && message.stream_id == 1u && message.key_epoch == 1u,
+          "stream.open result fields are reported");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":8,\"type\":\"result\","
+                                                         "\"result\":{\"state\":\"started\"}}"),
+                                          &message),
+                 GM_OK, "stream.start result schema parses");
+    check(std::strcmp(message.state, "started") == 0, "stream.start result state is copied");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":9,\"type\":\"result\","
+                                                         "\"result\":{\"output_state\":\"available\","
+                                                         "\"session_stream_state\":\"started\",\"transport_state\":\"bound\","
+                                                         "\"feedback_age_ms\":500}}"),
+                                          &message),
+                 GM_OK, "status.get result schema parses");
+    check(std::strcmp(message.output_state, "available") == 0 &&
+              std::strcmp(message.session_stream_state, "started") == 0 &&
+              std::strcmp(message.transport_state, "bound") == 0,
+          "status result state fields are copied");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":9,\"type\":\"result\","
+                                                         "\"result\":{\"endpoint_state\":\"available\","
+                                                         "\"session_stream_state\":\"started\",\"transport_state\":\"bound\","
+                                                         "\"feedback_age_ms\":500}}"),
+                                          &message),
+                 GM_BAD_MESSAGE, "old status endpoint_state result field is rejected");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"id\":7,\"type\":\"result\","
+                                                         "\"result\":{\"stream_id\":1,\"key_epoch\":1,"
+                                                         "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,"
+                                                         "\"channels\":2,\"channel_layout\":\"stereo\",\"frames_per_packet\":240},"
+                                                         "\"packet_interval_us\":5000,\"source_media_timestamp\":\"0\","
+                                                         "\"path_state\":\"probing\"}}"),
+                                          &message),
+                 GM_BAD_MESSAGE, "old stream.open source timestamp result is rejected");
+
+    check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"type\":\"event.output.state\","
+                                                         "\"state\":\"available\",\"reason\":\"ROUTE_READY\"}"),
+                                          &message),
+                 GM_OK, "output state event parses");
+    check(message.kind == GM_CONTROL_EVENT_OUTPUT_STATE && message.has_reason == 1u,
+          "output state event fields are reported");
+
     check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"type\":\"event.path.validated\","
                                                          "\"stream_id\":3,\"key_epoch\":1}"),
                                           &message),
-                 GM_OK, "path validated event parses");
-    check(message.kind == GM_CONTROL_EVENT_PATH_VALIDATED && message.stream_id == 3u && message.key_epoch == 1u,
-          "event fields are reported");
+                 GM_BAD_MESSAGE, "old path validation control event is rejected");
 }
 
 void test_media_header_and_replay() {
@@ -196,7 +304,7 @@ void test_media_header_and_replay() {
         header.session_id[index] = index;
     }
     header.stream_id = 7u;
-    header.direction = GM_MEDIA_DIRECTION_WIN_TO_MAC;
+    header.direction = GM_MEDIA_DIRECTION_WIN_TO_APPLE;
     header.key_epoch = 1u;
     header.sequence = 0x0102030405060708ull;
     header.media_timestamp = 0u;

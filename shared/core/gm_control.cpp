@@ -599,6 +599,27 @@ bool is_lower_hex_session_id(const std::string &value) {
     return true;
 }
 
+bool is_lower_uuid(const std::string &value) {
+    if (value.size() != GM_CONTROL_UUID_BYTES) {
+        return false;
+    }
+
+    for (size_t index = 0; index < value.size(); ++index) {
+        const char character = value[index];
+        if (index == 8u || index == 13u || index == 18u || index == 23u) {
+            if (character != '-') {
+                return false;
+            }
+            continue;
+        }
+        if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool is_reason_string(const std::string &value) {
     if (value.empty() || value.size() > GM_CONTROL_REASON_MAX_BYTES || !is_ascii(value)) {
         return false;
@@ -706,6 +727,57 @@ gm_status parse_profile(const JsonValue &object, gm_audio_profile *out_profile) 
     return GM_OK;
 }
 
+bool validate_capabilities(const JsonValue &object) {
+    if (!object_has_exact_keys(object, {"audio_send", "audio_receive", "microphone", "camera", "audio_profiles"})) {
+        return false;
+    }
+
+    bool audio_send = false;
+    bool audio_receive = false;
+    bool microphone = false;
+    bool camera = false;
+    const JsonValue *profiles = nullptr;
+    if (!get_required_bool(object, "audio_send", &audio_send) ||
+        !get_required_bool(object, "audio_receive", &audio_receive) ||
+        !get_required_bool(object, "microphone", &microphone) || !get_required_bool(object, "camera", &camera) ||
+        !get_required_array(object, "audio_profiles", &profiles)) {
+        return false;
+    }
+
+    if (audio_send || microphone || camera) {
+        return false;
+    }
+
+    if (audio_receive) {
+        if (profiles->array_values.empty() || profiles->array_values.size() > 2u) {
+            return false;
+        }
+    } else if (!profiles->array_values.empty()) {
+        return false;
+    }
+
+    for (const JsonValue &profile : profiles->array_values) {
+        gm_audio_profile parsed{};
+        if (parse_profile(profile, &parsed) != GM_OK) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool validate_limits(const JsonValue &object) {
+    uint32_t max_audio_subscribers = 0;
+    uint32_t playout_min = 0;
+    uint32_t playout_max = 0;
+    return object_has_exact_keys(object, {"max_audio_subscribers", "playout_target_ms_min", "playout_target_ms_max"}) &&
+           get_required_u32(object, "max_audio_subscribers", 0u, std::numeric_limits<uint32_t>::max(),
+                            &max_audio_subscribers) &&
+           get_required_u32(object, "playout_target_ms_min", 0u, std::numeric_limits<uint32_t>::max(), &playout_min) &&
+           get_required_u32(object, "playout_target_ms_max", 0u, std::numeric_limits<uint32_t>::max(), &playout_max) &&
+           playout_min <= playout_max;
+}
+
 gm_status validate_versions(const JsonValue &array, gm_control_message_info *out_info) {
     if (array.array_values.empty() || array.array_values.size() > GM_CONTROL_MAX_ARRAY_ELEMENTS) {
         return GM_BAD_MESSAGE;
@@ -740,6 +812,14 @@ bool is_endpoint_state(const std::string &state) {
     return state == "available" || state == "unavailable" || state == "faulted";
 }
 
+bool is_state_token(const std::string &state) {
+    return is_reason_string(state);
+}
+
+bool is_path_state(const std::string &state) {
+    return state == "bound" || state == "probing";
+}
+
 gm_status validate_required_decimal_string(const JsonValue &object, std::string_view name) {
     const std::string *value = nullptr;
     if (!get_required_string(object, name, &value) || !parse_decimal_u64_string(*value, nullptr)) {
@@ -756,7 +836,7 @@ gm_status validate_request(const JsonValue &root, const std::string &type, gm_co
         const std::string *role = nullptr;
         const std::string *client_name = nullptr;
         const JsonValue *versions = nullptr;
-        if (!get_required_string(root, "role", &role) || *role != "mac-client" ||
+        if (!get_required_string(root, "role", &role) || *role != "win-client" ||
             !get_required_string(root, "client_name", &client_name) ||
             client_name->size() > GM_CONTROL_CLIENT_NAME_MAX_BYTES ||
             !get_required_array(root, "versions", &versions) ||
@@ -797,7 +877,7 @@ gm_status validate_request(const JsonValue &root, const std::string &type, gm_co
         const std::string *direction = nullptr;
         const JsonValue *profile = nullptr;
         if (!get_required_string(root, "kind", &kind) || *kind != "audio" ||
-            !get_required_string(root, "direction", &direction) || *direction != "win_to_mac" ||
+            !get_required_string(root, "direction", &direction) || *direction != "win_to_apple" ||
             !get_required_object(root, "profile", &profile) ||
             !get_required_u32(root, "playout_target_ms", 15u, 120u, &out_info->playout_target_ms)) {
             return GM_BAD_MESSAGE;
@@ -811,14 +891,28 @@ gm_status validate_request(const JsonValue &root, const std::string &type, gm_co
         return GM_OK;
     }
 
-    if (type == "stream.start" || type == "stream.stop" || type == "stream.close") {
+    if (type == "stream.start") {
+        if (!object_has_exact_keys(root, {"v", "id", "type", "stream_id", "first_media_timestamp"}) ||
+            !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id)) {
+            return GM_BAD_MESSAGE;
+        }
+        const std::string *first_media_timestamp = nullptr;
+        if (!get_required_string(root, "first_media_timestamp", &first_media_timestamp) ||
+            !parse_decimal_u64_string(*first_media_timestamp, nullptr)) {
+            return GM_BAD_MESSAGE;
+        }
+        out_info->kind = GM_CONTROL_REQUEST_STREAM_START;
+        out_info->mutating = 1u;
+        copy_string_field(out_info->first_media_timestamp, sizeof(out_info->first_media_timestamp), *first_media_timestamp);
+        return GM_OK;
+    }
+
+    if (type == "stream.stop" || type == "stream.close") {
         if (!object_has_exact_keys(root, {"v", "id", "type", "stream_id"}) ||
             !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id)) {
             return GM_BAD_MESSAGE;
         }
-        out_info->kind = type == "stream.start"   ? GM_CONTROL_REQUEST_STREAM_START
-                         : type == "stream.stop"  ? GM_CONTROL_REQUEST_STREAM_STOP
-                                                    : GM_CONTROL_REQUEST_STREAM_CLOSE;
+        out_info->kind = type == "stream.stop" ? GM_CONTROL_REQUEST_STREAM_STOP : GM_CONTROL_REQUEST_STREAM_CLOSE;
         out_info->mutating = 1u;
         return GM_OK;
     }
@@ -909,47 +1003,149 @@ gm_status validate_result(const JsonValue &root, gm_control_message_info *out_in
         !get_required_object(root, "result", &result)) {
         return GM_BAD_MESSAGE;
     }
-    out_info->kind = GM_CONTROL_RESPONSE_RESULT;
-    return GM_OK;
+
+    if (object_has_exact_keys(*result, {"version", "role", "server_id", "session_id", "boot_id", "udp_port", "capabilities", "limits"})) {
+        uint32_t version = 0;
+        uint32_t udp_port = 0;
+        const std::string *role = nullptr;
+        const std::string *server_id = nullptr;
+        const std::string *session_id = nullptr;
+        const std::string *boot_id = nullptr;
+        const JsonValue *capabilities = nullptr;
+        const JsonValue *limits = nullptr;
+        if (!get_required_u32(*result, "version", 1u, 255u, &version) || version != GM_PROTOCOL_MAJOR ||
+            !get_required_string(*result, "role", &role) || *role != "apple-output-server" ||
+            !get_required_string(*result, "server_id", &server_id) || !is_lower_uuid(*server_id) ||
+            !get_required_string(*result, "session_id", &session_id) || !is_lower_hex_session_id(*session_id) ||
+            !get_required_string(*result, "boot_id", &boot_id) || !is_lower_uuid(*boot_id) ||
+            !get_required_u32(*result, "udp_port", 1u, 65535u, &udp_port) ||
+            !get_required_object(*result, "capabilities", &capabilities) || !validate_capabilities(*capabilities) ||
+            !get_required_object(*result, "limits", &limits) || !validate_limits(*limits)) {
+            return GM_BAD_MESSAGE;
+        }
+        (void)udp_port;
+        out_info->udp_port = udp_port;
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        copy_string_field(out_info->role, sizeof(out_info->role), *role);
+        copy_string_field(out_info->server_id, sizeof(out_info->server_id), *server_id);
+        copy_string_field(out_info->boot_id, sizeof(out_info->boot_id), *boot_id);
+        copy_string_field(out_info->session_id, sizeof(out_info->session_id), *session_id);
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"udp_port", "path_state"})) {
+        uint32_t udp_port = 0;
+        const std::string *path_state = nullptr;
+        if (!get_required_u32(*result, "udp_port", 1u, 65535u, &udp_port) ||
+            !get_required_string(*result, "path_state", &path_state) || *path_state != "bound") {
+            return GM_BAD_MESSAGE;
+        }
+        out_info->udp_port = udp_port;
+        copy_string_field(out_info->path_state, sizeof(out_info->path_state), *path_state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"stream_id", "key_epoch", "profile", "packet_interval_us", "path_state"})) {
+        uint32_t packet_interval_us = 0;
+        const std::string *path_state = nullptr;
+        const JsonValue *profile = nullptr;
+        if (!get_required_u32(*result, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
+            !get_required_u32(*result, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch) ||
+            !get_required_object(*result, "profile", &profile) || parse_profile(*profile, &out_info->profile) != GM_OK ||
+            !get_required_u32(*result, "packet_interval_us", 0u, std::numeric_limits<uint32_t>::max(), &packet_interval_us) ||
+            !get_required_string(*result, "path_state", &path_state) || *path_state != "probing") {
+            return GM_BAD_MESSAGE;
+        }
+        if (packet_interval_us != out_info->profile.packet_interval_us) {
+            return GM_BAD_MESSAGE;
+        }
+        copy_string_field(out_info->path_state, sizeof(out_info->path_state), *path_state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"stream_id", "key_epoch", "state"})) {
+        const std::string *state = nullptr;
+        if (!get_required_u32(*result, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
+            !get_required_u32(*result, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch) ||
+            !get_required_string(*result, "state", &state) || !is_state_token(*state)) {
+            return GM_BAD_MESSAGE;
+        }
+        copy_string_field(out_info->state, sizeof(out_info->state), *state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"stream_id", "state"})) {
+        const std::string *state = nullptr;
+        if (!get_required_u32(*result, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
+            !get_required_string(*result, "state", &state) || !is_state_token(*state)) {
+            return GM_BAD_MESSAGE;
+        }
+        copy_string_field(out_info->state, sizeof(out_info->state), *state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"state"})) {
+        const std::string *state = nullptr;
+        if (!get_required_string(*result, "state", &state) || !is_state_token(*state)) {
+            return GM_BAD_MESSAGE;
+        }
+        copy_string_field(out_info->state, sizeof(out_info->state), *state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"output_state", "session_stream_state", "transport_state", "feedback_age_ms"})) {
+        uint32_t feedback_age_ms = 0;
+        const std::string *output_state = nullptr;
+        const std::string *session_stream_state = nullptr;
+        const std::string *transport_state = nullptr;
+        if (!get_required_string(*result, "output_state", &output_state) || !is_endpoint_state(*output_state) ||
+            !get_required_string(*result, "session_stream_state", &session_stream_state) || !is_state_token(*session_stream_state) ||
+            !get_required_string(*result, "transport_state", &transport_state) || !is_state_token(*transport_state) ||
+            !get_required_u32(*result, "feedback_age_ms", 0u, 6000u, &feedback_age_ms)) {
+            return GM_BAD_MESSAGE;
+        }
+        copy_string_field(out_info->output_state, sizeof(out_info->output_state), *output_state);
+        copy_string_field(out_info->session_stream_state, sizeof(out_info->session_stream_state), *session_stream_state);
+        copy_string_field(out_info->transport_state, sizeof(out_info->transport_state), *transport_state);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    if (object_has_exact_keys(*result, {"token", "monotonic_ns"})) {
+        const std::string *token = nullptr;
+        if (!get_required_string(*result, "token", &token) || token->empty() || token->size() > GM_CONTROL_TOKEN_MAX_BYTES ||
+            !is_ascii(*token) || validate_required_decimal_string(*result, "monotonic_ns") != GM_OK) {
+            return GM_BAD_MESSAGE;
+        }
+        const std::string *monotonic_ns = nullptr;
+        (void)get_required_string(*result, "monotonic_ns", &monotonic_ns);
+        copy_string_field(out_info->token, sizeof(out_info->token), *token);
+        copy_string_field(out_info->monotonic_ns, sizeof(out_info->monotonic_ns), *monotonic_ns);
+        out_info->kind = GM_CONTROL_RESPONSE_RESULT;
+        return GM_OK;
+    }
+
+    return GM_BAD_MESSAGE;
 }
 
 gm_status validate_event(const JsonValue &root, const std::string &type, gm_control_message_info *out_info) {
-    if (type == "event.path.validated") {
-        if (!object_has_exact_keys(root, {"v", "type", "stream_id", "key_epoch"}) ||
-            !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
-            !get_required_u32(root, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch)) {
-            return GM_BAD_MESSAGE;
-        }
-        out_info->kind = GM_CONTROL_EVENT_PATH_VALIDATED;
-        return GM_OK;
-    }
-
-    if (type == "event.path.failed") {
-        if (!object_has_exact_keys(root, {"v", "type", "stream_id", "key_epoch", "reason"}) ||
-            !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
-            !get_required_u32(root, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch)) {
-            return GM_BAD_MESSAGE;
-        }
-        const std::string *reason = nullptr;
-        if (!get_required_string(root, "reason", &reason) || !is_reason_string(*reason)) {
-            return GM_BAD_MESSAGE;
-        }
-        out_info->kind = GM_CONTROL_EVENT_PATH_FAILED;
-        out_info->has_reason = 1u;
-        copy_string_field(out_info->reason, sizeof(out_info->reason), *reason);
-        return GM_OK;
-    }
-
     if (type == "event.stream.started") {
         if (!object_has_exact_keys(root, {"v", "type", "stream_id", "first_media_timestamp"}) ||
             !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id)) {
             return GM_BAD_MESSAGE;
         }
-        gm_status status = validate_required_decimal_string(root, "first_media_timestamp");
-        if (status != GM_OK) {
-            return status;
+        const std::string *first_media_timestamp = nullptr;
+        if (!get_required_string(root, "first_media_timestamp", &first_media_timestamp) ||
+            !parse_decimal_u64_string(*first_media_timestamp, nullptr)) {
+            return GM_BAD_MESSAGE;
         }
         out_info->kind = GM_CONTROL_EVENT_STREAM_STARTED;
+        copy_string_field(out_info->first_media_timestamp, sizeof(out_info->first_media_timestamp), *first_media_timestamp);
         return GM_OK;
     }
 
@@ -968,38 +1164,7 @@ gm_status validate_event(const JsonValue &root, const std::string &type, gm_cont
         return GM_OK;
     }
 
-    if (type == "event.stream.rekey_required") {
-        if (!object_has_exact_keys(root, {"v", "type", "stream_id", "key_epoch", "deadline_monotonic_ns"}) ||
-            !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
-            !get_required_u32(root, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch)) {
-            return GM_BAD_MESSAGE;
-        }
-        gm_status status = validate_required_decimal_string(root, "deadline_monotonic_ns");
-        if (status != GM_OK) {
-            return status;
-        }
-        out_info->kind = GM_CONTROL_EVENT_STREAM_REKEY_REQUIRED;
-        return GM_OK;
-    }
-
-    if (type == "event.stream.rekeyed") {
-        uint32_t old_epoch = 0;
-        if (!object_has_exact_keys(root, {"v", "type", "stream_id", "old_key_epoch", "key_epoch", "first_media_timestamp"}) ||
-            !get_required_u32(root, "stream_id", 1u, std::numeric_limits<uint32_t>::max(), &out_info->stream_id) ||
-            !get_required_u32(root, "old_key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &old_epoch) ||
-            !get_required_u32(root, "key_epoch", 1u, std::numeric_limits<uint32_t>::max(), &out_info->key_epoch)) {
-            return GM_BAD_MESSAGE;
-        }
-        (void)old_epoch;
-        gm_status status = validate_required_decimal_string(root, "first_media_timestamp");
-        if (status != GM_OK) {
-            return status;
-        }
-        out_info->kind = GM_CONTROL_EVENT_STREAM_REKEYED;
-        return GM_OK;
-    }
-
-    if (type == "event.driver.state") {
+    if (type == "event.output.state") {
         const std::string *state = nullptr;
         const std::string *reason = nullptr;
         if (!object_has_exact_keys(root, {"v", "type", "state", "reason"}) ||
@@ -1007,7 +1172,7 @@ gm_status validate_event(const JsonValue &root, const std::string &type, gm_cont
             !get_required_string(root, "reason", &reason) || !is_reason_string(*reason)) {
             return GM_BAD_MESSAGE;
         }
-        out_info->kind = GM_CONTROL_EVENT_DRIVER_STATE;
+        out_info->kind = GM_CONTROL_EVENT_OUTPUT_STATE;
         out_info->has_reason = 1u;
         copy_string_field(out_info->reason, sizeof(out_info->reason), *reason);
         return GM_OK;

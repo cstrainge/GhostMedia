@@ -31,7 +31,9 @@
 #define GM_CONTROL_TOKEN_MAX_BYTES 64u
 #define GM_CONTROL_REASON_MAX_BYTES 64u
 #define GM_CONTROL_SESSION_ID_HEX_BYTES 32u
-#define GM_CONTROL_ROLE_MAX_BYTES 16u
+#define GM_CONTROL_ROLE_MAX_BYTES 32u
+#define GM_CONTROL_DECIMAL_U64_MAX_BYTES 20u
+#define GM_CONTROL_UUID_BYTES 36u
 
 #define GM_SESSION_ID_BYTES 16u
 #define GM_MEDIA_HEADER_BYTES 64u
@@ -76,14 +78,10 @@ typedef enum gm_control_message_kind {
     GM_CONTROL_REQUEST_SESSION_CLOSE = 10,
     GM_CONTROL_RESPONSE_RESULT = 100,
     GM_CONTROL_RESPONSE_ERROR = 101,
-    GM_CONTROL_EVENT_PATH_VALIDATED = 200,
-    GM_CONTROL_EVENT_PATH_FAILED = 201,
-    GM_CONTROL_EVENT_STREAM_STARTED = 202,
-    GM_CONTROL_EVENT_STREAM_STOPPED = 203,
-    GM_CONTROL_EVENT_STREAM_REKEY_REQUIRED = 204,
-    GM_CONTROL_EVENT_STREAM_REKEYED = 205,
-    GM_CONTROL_EVENT_DRIVER_STATE = 206,
-    GM_CONTROL_EVENT_SESSION_EXPIRING = 207
+    GM_CONTROL_EVENT_STREAM_STARTED = 200,
+    GM_CONTROL_EVENT_STREAM_STOPPED = 201,
+    GM_CONTROL_EVENT_OUTPUT_STATE = 202,
+    GM_CONTROL_EVENT_SESSION_EXPIRING = 203
 } gm_control_message_kind;
 
 typedef enum gm_audio_codec {
@@ -107,8 +105,8 @@ typedef enum gm_media_kind {
 
 typedef enum gm_media_direction {
     GM_MEDIA_DIRECTION_UNKNOWN = 0,
-    GM_MEDIA_DIRECTION_WIN_TO_MAC = 1,
-    GM_MEDIA_DIRECTION_MAC_TO_WIN = 2
+    GM_MEDIA_DIRECTION_WIN_TO_APPLE = 1,
+    GM_MEDIA_DIRECTION_APPLE_TO_WIN = 2
 } gm_media_direction;
 
 typedef enum gm_replay_result {
@@ -173,9 +171,18 @@ typedef struct gm_control_message_info {
     char type[GM_CONTROL_TYPE_MAX_BYTES + 1u];
     char role[GM_CONTROL_ROLE_MAX_BYTES + 1u];
     char client_name[GM_CONTROL_CLIENT_NAME_MAX_BYTES + 1u];
+    char server_id[GM_CONTROL_UUID_BYTES + 1u];
+    char boot_id[GM_CONTROL_UUID_BYTES + 1u];
     char session_id[GM_CONTROL_SESSION_ID_HEX_BYTES + 1u];
     char token[GM_CONTROL_TOKEN_MAX_BYTES + 1u];
     char reason[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char path_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char output_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char session_stream_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char transport_state[GM_CONTROL_REASON_MAX_BYTES + 1u];
+    char first_media_timestamp[GM_CONTROL_DECIMAL_U64_MAX_BYTES + 1u];
+    char monotonic_ns[GM_CONTROL_DECIMAL_U64_MAX_BYTES + 1u];
 } gm_control_message_info;
 
 typedef struct gm_media_header {
