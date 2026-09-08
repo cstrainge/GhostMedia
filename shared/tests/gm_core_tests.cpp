@@ -286,13 +286,23 @@ void test_control_message_parsing() {
                                                          "\"state\":\"available\",\"reason\":\"ROUTE_READY\"}"),
                                           &message),
                  GM_OK, "output state event parses");
-    check(message.kind == GM_CONTROL_EVENT_OUTPUT_STATE && message.has_reason == 1u,
+    check(message.kind == GM_CONTROL_EVENT_OUTPUT_STATE && message.has_reason == 1u &&
+              std::strcmp(message.state, "available") == 0,
           "output state event fields are reported");
 
     check_status(gm_control_parse_message(bytes_from_cstr("{\"v\":1,\"type\":\"event.path.validated\","
                                                          "\"stream_id\":3,\"key_epoch\":1}"),
                                           &message),
                  GM_BAD_MESSAGE, "old path validation control event is rejected");
+
+    check_status(gm_control_parse_message(
+                     bytes_from_cstr("{\"v\":1,\"type\":\"event.session.expiring\","
+                                     "\"reason\":\"SERVER_RESTART\",\"deadline_monotonic_ns\":\"123456789\"}"),
+                     &message),
+                 GM_OK, "session expiring event parses");
+    check(message.kind == GM_CONTROL_EVENT_SESSION_EXPIRING &&
+              std::strcmp(message.monotonic_ns, "123456789") == 0,
+          "session expiring deadline is reported");
 }
 
 void test_media_header_and_replay() {

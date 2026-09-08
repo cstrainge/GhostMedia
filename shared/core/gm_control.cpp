@@ -1174,6 +1174,7 @@ gm_status validate_event(const JsonValue &root, const std::string &type, gm_cont
         }
         out_info->kind = GM_CONTROL_EVENT_OUTPUT_STATE;
         out_info->has_reason = 1u;
+        copy_string_field(out_info->state, sizeof(out_info->state), *state);
         copy_string_field(out_info->reason, sizeof(out_info->reason), *reason);
         return GM_OK;
     }
@@ -1190,7 +1191,14 @@ gm_status validate_event(const JsonValue &root, const std::string &type, gm_cont
         }
         out_info->kind = GM_CONTROL_EVENT_SESSION_EXPIRING;
         out_info->has_reason = 1u;
+        const std::string *deadline_monotonic_ns = nullptr;
+        (void)get_required_string(root, "deadline_monotonic_ns", &deadline_monotonic_ns);
         copy_string_field(out_info->reason, sizeof(out_info->reason), *reason);
+        copy_string_field(
+            out_info->monotonic_ns,
+            sizeof(out_info->monotonic_ns),
+            *deadline_monotonic_ns
+        );
         return GM_OK;
     }
 
