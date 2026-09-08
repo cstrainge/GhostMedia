@@ -25,7 +25,8 @@ An implementation conforms to v1 only when it passes shared cross-platform tests
    IOCTL validation, read-only mappings, non-inheritable/non-writable mapping
    handles, odd/even interlocked commit publication, stale/duplicated handle epoch isolation,
    close/cancellation races, service death, PnP removal, and bridge reattach.
-8. Fault tests kill/restart the service, stop the Mac, blackhole UDP, delay/reorder/
+8. Fault tests kill/restart the Windows service or Apple output server, stop the Apple
+   app, blackhole UDP, delay/reorder/
    duplicate packets, fill all queues, alter network interface/address/route/firewall
    profile, and change output route. An interface loss withdraws discovery, stops
    its bound stream, invalidates its path, and requires fresh discovery/TLS/path
@@ -44,11 +45,12 @@ An implementation conforms to v1 only when it passes shared cross-platform tests
 11. Resource tests show queue/datagram/frame limits bound memory and that logs and
     diagnostic artifacts omit audio and secrets.
 12. Authorization tests prove that an approved audio peer cannot begin media until
-    the companion UI acknowledges the visible indicator, that `Stop stream` ends
+    the Apple output app acknowledges the visible indicator, that `Stop stream` ends
     media promptly, that revocation closes sessions, and that headless streaming
     requires explicit local enablement plus its required local audit record.
-13. Server-identity tests prove first-run CSPRNG generation, persistent reuse across
-    service restart and network-name/address changes, non-advertisement before TLS,
+13. Server-identity tests prove first-run CSPRNG generation by the Apple output
+    server, persistent reuse across its restart and network-name/address changes,
+    non-advertisement before TLS,
     client rejection of an authenticated `server_id` mismatch, and controlled reset
     behavior after image-clone or explicit identity-reset simulation. They also prove
     startup fails closed when protected identity storage is unavailable and that a
@@ -60,21 +62,21 @@ separate production CSPRNG tests. Production keys/packets never become fixtures.
 ## Reference successful trace
 
 ```text
-Mac    mDNS browse -> Windows service record
-Mac    TLS 1.3 mutual-auth connect, ALPN ghostmedia/1
-Mac -> Win  session.hello(id=1, udp_port=49152)
-Win -> Mac  result(server_id, session_id, udp_port=51838, capabilities)
-Mac -> Win  transport.bind(id=2, udp_port=49152)
-Win -> Mac  result(path_state=bound)
-Mac -> Win  stream.open(id=3, PCM 48k/stereo/240, target=30ms)
-Win -> Mac  result(stream_id=1, key_epoch=1, path_state=probing)
-Win => Mac  encrypted PATH_CHALLENGE; Mac => Win PATH_RESPONSE
-Win -> Mac  event.path.validated
-Mac -> Win  stream.start(id=4, stream_id=1)
-Win -> Mac  result(first_media_timestamp="...") then event.stream.started
-Win => Mac  protected GMA AUDIO every 5 ms
-Mac => Win  protected FEEDBACK every 500 ms
-Mac -> Win  stream.stop, stream.close, session.close
+Win    mDNS browse -> Apple output-server record
+Win    TLS 1.3 mutual-auth connect, ALPN ghostmedia/1
+Win -> Apple  session.hello(id=1, udp_port=49152)
+Apple -> Win  result(server_id, session_id, udp_port=51838, capabilities)
+Win -> Apple  transport.bind(id=2, udp_port=49152)
+Apple -> Win  result(path_state=bound)
+Win -> Apple  stream.open(id=3, PCM 48k/stereo/240, target=30ms)
+Apple -> Win  result(stream_id=1, key_epoch=1, path_state=probing)
+Win => Apple  encrypted PATH_CHALLENGE; Apple => Win PATH_RESPONSE
+Apple -> Win  event.path.validated
+Win -> Apple  stream.start(id=4, stream_id=1)
+Apple -> Win  result(first_media_timestamp="...") then event.stream.started
+Win => Apple  protected GMA AUDIO every 5 ms
+Apple => Win  protected FEEDBACK every 500 ms
+Win -> Apple  stream.stop, stream.close, session.close
 ```
 
 The trace is illustrative; every value is checked against the defined states and

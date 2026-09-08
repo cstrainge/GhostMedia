@@ -15,7 +15,7 @@ offset size field
 6      2    flags: 0 in v1
 8      16   session_id: raw bytes decoded from control hex
 24     4    stream_id
-28     1    direction: 1 WIN_TO_MAC, 2 MAC_TO_WIN
+28     1    direction: 1 WIN_TO_APPLE, 2 APPLE_TO_WIN
 29     3    reserved: 0
 32     4    key_epoch: 1..4294967295
 36     8    sequence: per-direction, per-epoch u64
@@ -60,9 +60,9 @@ storage and never creates a tuple entry for an unknown packet.
 
 `transport.bind` commits the only candidate UDP tuple: TCP peer address plus the
 UDP port supplied over authenticated control. An authorized `stream.open` enters `probing` and sends
-a PATH_CHALLENGE in the Windows-to-Mac direction. Its plaintext is exactly one
-fresh 96-bit CSPRNG value. The Mac returns the same 12 bytes in PATH_RESPONSE using
-its Mac-to-Windows path key and a new sequence. It never echoes ciphertext, header,
+a PATH_CHALLENGE in the Windows-to-Apple direction. Its plaintext is exactly one
+fresh 96-bit CSPRNG value. The Apple output server returns the same 12 bytes in
+PATH_RESPONSE using its Apple-to-Windows path key and a new sequence. It never echoes ciphertext, header,
 or received sequence.
 
 Send at most three challenges, one per second, and at most eight per stream per
@@ -79,7 +79,7 @@ second old-epoch grace. Any other address/port change requires a new TCP session
 
 ## 3. Payload rules
 
-AUDIO has an active nonzero stream and epoch, Windows-to-Mac direction, and a
+AUDIO has an active nonzero stream and epoch, Windows-to-Apple direction, and a
 negotiated profile. PCM is interleaved signed 16-bit little-endian samples, exactly
 `frames_per_packet * channels * 2` bytes: 960 bytes for the baseline 48 kHz,
 stereo, 240-frame profile. Its timestamps are aligned to its first timestamp by
@@ -93,7 +93,7 @@ block and advance timestamp. PCM underrun sends timestamped silence. Opus underr
 sends an encoded silent frame or reports a discontinuity and restarts. Never delay
 stale samples to preserve transport sequence.
 
-FEEDBACK has an active stream/epoch, Mac-to-Windows direction, zero timestamp, and
+FEEDBACK has an active stream/epoch, Apple-to-Windows direction, zero timestamp, and
 exactly this 32-byte plaintext:
 
 ```text
@@ -107,7 +107,7 @@ exactly this 32-byte plaintext:
 28 4 flags: bit 0 output_running, bit 1 output_underflow_since_last; others 0
 ```
 
-Mac sends one feedback every 500 ms while active. Windows accepts one per stream
+The Apple output server sends one feedback every 500 ms while active. Windows accepts one per stream
 per 250 ms and ignores malformed, stale, inactive, or wrong-epoch feedback. It is
 untrusted telemetry: it cannot allocate memory, change driver or security state,
 alter format, or trigger an unsolicited control message. Missing feedback for three

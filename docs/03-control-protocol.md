@@ -3,7 +3,7 @@
 ## 1. Transport and framing
 
 Control runs only inside the mutually authenticated TLS 1.3 connection defined in
-document 02. The Windows service listens; the Mac initiates. TCP byte order is
+document 02. The Apple output server listens; Windows initiates. TCP byte order is
 big-endian. A control frame is:
 
 ```text
@@ -105,37 +105,38 @@ only the following per-request fields:
 | `stream.rekey` | `stream_id`, `key_epoch`, `state` |
 | `stream.start` | `first_packet_not_before_monotonic_ns`, `first_media_timestamp` |
 | `stream.stop`, `stream.close` | `stream_id`, `state` |
-| `status.get` | `endpoint_state`, `session_stream_state`, `transport_state`, `feedback_age_ms` |
+| `status.get` | `output_state`, `session_stream_state`, `transport_state`, `feedback_age_ms` |
 | `ping` | `token`, `monotonic_ns` |
 | `session.close` | `state` |
 
 `server_id` is canonical lowercase UUID text and is present only in the authenticated
-Windows `session.hello` result. `stream_id` and `key_epoch` are integers in 1..4,294,967,295; durations in
+Apple output-server `session.hello` result. `stream_id` and `key_epoch` are integers in 1..4,294,967,295; durations in
 microseconds/milliseconds are non-negative integers within u32. In the hello
 result, `capabilities` has exactly boolean `audio_send`, `audio_receive`,
 `microphone`, and `camera`, plus `audio_profiles`: an array of 1 through 2 closed
-profile objects from section 4.2. The latter is empty when `audio_send` is false.
+profile objects from section 4.2. The latter is empty when `audio_receive` is false.
 `limits` has exactly integer `max_audio_subscribers`,
 `playout_target_ms_min`, and `playout_target_ms_max`, each in 0..u32.
-`endpoint_state` is `available`, `unavailable`, or `faulted`; session and
+`output_state` is the Apple output server's local state: `available`, `unavailable`,
+or `faulted`; session and
 transport states use only values explicitly defined by their request sections.
 A v1 implementation MUST document and test the exact result schema it emits; it
 MUST NOT smuggle diagnostic or implementation state into a result object.
 
 ## 3. Establishing a session
 
-Within two seconds of TLS completion, the Mac sends `session.hello`; Windows must
-reply before any other request. A failed hello closes the TLS connection. The
-claimed `role` must be compatible with the fixed endpoint role (the Mac sends
-`mac-client`; Windows returns `win-device`). It is only a compatibility hint: the
+Within two seconds of TLS completion, Windows sends `session.hello`; the Apple output
+server must reply before any other request. A failed hello closes the TLS connection.
+The claimed `role` must be compatible with the fixed endpoint role (Windows sends
+`win-client`; the Apple output server returns `apple-output-server`). It is only a compatibility hint: the
 TLS-authenticated SPKI and local trust record in document 02, not a claimed role or
 JSON identity, authorize every operation.
 
 ```json
 {
   "v": 1, "id": 1, "type": "session.hello",
-  "role": "mac-client",
-  "client_name": "Living Room Mac", "versions": [1],
+  "role": "win-client",
+  "client_name": "Studio PC", "versions": [1],
   "udp_port": 49152
 }
 ```
@@ -152,9 +153,9 @@ check, and this schema validation have all succeeded.
 {
   "v": 1, "id": 1, "type": "result",
   "result": {
-    "version": 1, "role": "win-device", "server_id": "<uuid>",
+    "version": 1, "role": "apple-output-server", "server_id": "<uuid>",
     "session_id": "<32 lowercase hex>", "boot_id": "<uuid>",
-    "udp_port": 51838, "capabilities": {"audio_send": true, "audio_receive": false,
+    "udp_port": 51838, "capabilities": {"audio_send": false, "audio_receive": true,
       "microphone": false, "camera": false, "audio_profiles": [
         {"codec":"pcm_s16le","sample_rate_hz":48000,"channels":2,
          "channel_layout":"stereo","frames_per_packet":240}]},
@@ -164,48 +165,49 @@ check, and this schema validation have all succeeded.
 }
 ```
 
-Windows allocates `session_id` before sending its response, derives no media
-material until an authorized stream is opened, and retains the session for the TCP
-connection lifetime. `audio_send:false` means no driver/endpoint is presently
-usable; the connection remains usable for status. The Mac MUST call
-`transport.bind` after hello even though ports were exchanged: that commits the
-tuple. Before any bind or stream request, the Mac compares returned `server_id` to
-its configured server ID; a mismatch closes TLS, records no new trust data, and
-continues discovery. Path validation is per stream and begins only after authorized
+The Apple output server allocates `session_id` before sending its response, derives no
+media material until an authorized stream is opened, and retains the session for the
+TCP connection lifetime. `audio_receive:false` means no local output is presently
+usable; the connection remains usable for status. Windows MUST call `transport.bind`
+after hello even though ports were exchanged: that commits the tuple. Before any bind
+or stream request, Windows compares returned `server_id` to its configured server ID;
+a mismatch closes TLS, records no new trust data, and continues discovery. Path
+validation is per stream and begins only after authorized
 `stream.open`.
 
 ## 4. Requests
 
 ### 4.1 `transport.bind`
 
-Mac request:
+Windows request:
 
 ```json
 {"v":1,"id":2,"type":"transport.bind","session_id":"<session_id>","udp_port":49152}
 ```
 
-The session ID must match. `udp_port` must equal hello's port in v1. Windows
-responds with its port and `path_state:"bound"`; it does not itself send UDP.
+The session ID must match. `udp_port` must equal hello's port in v1. The Apple output
+server responds with its port and `path_state:"bound"`; it does not itself send UDP.
 Calling bind twice returns the original committed tuple
 and state without reopening or changing it. A different port is `STATE_CONFLICT`.
 Neither party sends audio before the specific stream's `event.path.validated`.
 
 ### 4.2 `stream.open`
 
-After a successful `transport.bind`, the Mac requests one specific profile:
+After a successful `transport.bind`, Windows requests one specific profile:
 
 ```json
 {
-  "v":1,"id":3,"type":"stream.open","kind":"audio","direction":"win_to_mac",
+  "v":1,"id":3,"type":"stream.open","kind":"audio","direction":"win_to_apple",
   "profile":{"codec":"pcm_s16le","sample_rate_hz":48000,"channels":2,
     "channel_layout":"stereo","frames_per_packet":240},
   "playout_target_ms":30
 }
 ```
 
-`kind` and `direction` are fixed in v1. Windows verifies the locally granted
-`receive_system_audio` permission, driver availability, a bound candidate tuple,
-sole-subscriber ownership, full profile support, and playout range. It reserves
+`kind` and `direction` are fixed in v1. The Apple output server verifies the locally
+granted `receive_system_audio` permission, local output availability, a bound
+candidate tuple, sole-subscriber ownership, full profile support, and playout range.
+It reserves
 the subscription before responding. It returns
 an allocated `stream_id`, `key_epoch:1`, canonical accepted profile, nominal
 packet interval, current source media timestamp as a decimal string, and
@@ -215,23 +217,23 @@ begins the bounded path challenge in document 04 only after responding. A stream
 stream is open returns the same result; a nonidentical open is `STATE_CONFLICT`.
 
 Optional Opus profile exactly uses `codec:"opus"`, `sample_rate_hz:48000`,
-`channels:2`, `channel_layout:"stereo"`, `frames_per_packet:480`. The service
-MUST advertise it in `capabilities.audio_profiles` before accepting it. Opus is
+`channels:2`, `channel_layout:"stereo"`, `frames_per_packet:480`. The Apple output
+server MUST advertise it in `capabilities.audio_profiles` before accepting it. Opus is
 one complete RFC 6716 packet per media datagram; no RTP payload header, aggregation,
 or fragmentation is used. Decoded duration must equal `frames_per_packet`.
 
 ### 4.3 `stream.start`, `stream.stop`, and `stream.close`
 
 `stream.start` has `stream_id`. It requires that stream's path to be validated.
-After its successful response, Windows may send
-audio beginning at the returned `first_packet_not_before_monotonic_ns`; this is
-a decimal string in Windows' monotonic domain and is informational only. The first
+After its successful response, Windows may send audio beginning at the returned
+`first_packet_not_before_monotonic_ns`; this is a decimal string in the Apple output
+server's monotonic domain and is informational only. The first
 media packet MUST carry the returned `first_media_timestamp`; receivers flush any
 old playout state for that ID then. Starting an already started stream is idempotent.
 
-`stream.stop` stops send pacing, releases no ownership, and flushes the service
-capture-to-network queue. Its response confirms no later audio packet will be
-intentionally sent. The Mac flushes its jitter buffer on success. `stream.close`
+Before sending `stream.stop`, Windows stops send pacing, releases no ownership, and
+flushes its capture-to-network queue. The Apple output server's response confirms it
+will discard that stream; it flushes its jitter buffer on success. `stream.close`
 implies stop, destroys stream-specific state, and releases sole-subscriber
 ownership. Both are idempotent only while their session remains alive. A packet
 for a closed stream is dropped. A start after stop restarts the same open stream
@@ -239,8 +241,8 @@ with the next valid source timestamp; the receiver treats this as a discontinuit
 
 ### 4.4 `stream.rekey`
 
-Windows emits `event.stream.rekey_required` before its next packet would exceed
-the 30-minute, 2^32-packet, or sequence-wrap limit in document 02. The Mac sends
+The Apple output server emits `event.stream.rekey_required` before its next packet
+would exceed the 30-minute, 2^32-packet, or sequence-wrap limit in document 02. Windows sends
 `stream.rekey` with exactly `stream_id` and `key_epoch` (equal to the current epoch
 plus one), for example
 
@@ -248,13 +250,13 @@ plus one), for example
 {"v":1,"id":8,"type":"stream.rekey","stream_id":1,"key_epoch":2}
 ```
 
-Windows verifies that exact next value, derives the new epoch's directional keys,
-starts a fresh bounded path challenge, and returns `state:"probing"` while the old
-epoch continues paced audio. It never sends audio at the new epoch until
-`event.path.validated` for that stream. On validation it switches epochs at the next
-packet boundary, preserving media-timestamp continuity, and emits
+The Apple output server verifies that exact next value, derives the new epoch's
+directional keys, starts a fresh bounded path challenge, and returns `state:"probing"`
+while the old epoch continues paced audio. Windows never sends audio at the new epoch
+until `event.path.validated` for that stream. On validation it switches epochs at the
+next packet boundary, preserving media-timestamp continuity, and emits
 `event.stream.rekeyed` with `stream_id`, `old_key_epoch`, `key_epoch`, and
-`first_media_timestamp`. The Mac has already derived the requested epoch and accepts
+`first_media_timestamp`. Windows has already derived the requested epoch and accepts
 both epochs during the five-second overlap without flushing its jitter buffer or
 calling `stream.start`. A rekey request with another value is `STATE_CONFLICT`; a
 duplicate committed request returns the same result. The old epoch is erased after
@@ -284,8 +286,8 @@ the requester accepts either the response or connection close as success.
 ## 5. Events and error codes
 
 Events are ordered with responses over the TCP byte stream. Events are emitted
-only for the recipient's own session; `event.driver.state` exposes only the three
-endpoint states and a fixed reason enumeration, never a platform error:
+only for the recipient's own session; `event.output.state` exposes only the three
+Apple output states and a fixed reason enumeration, never a platform error:
 
 | Event | Required fields | Meaning |
 | --- | --- | --- |
@@ -293,9 +295,9 @@ endpoint states and a fixed reason enumeration, never a platform error:
 | `event.path.failed` | `stream_id`, `key_epoch`, `reason` | Path deadline elapsed; that epoch may not start |
 | `event.stream.started` | `stream_id`, `first_media_timestamp` | Send path committed |
 | `event.stream.stopped` | `stream_id`, `reason` | Sender stopped; receiver flushes this stream |
-| `event.stream.rekey_required` | `stream_id`, `key_epoch`, `deadline_monotonic_ns` | Mac must initiate the next epoch |
+| `event.stream.rekey_required` | `stream_id`, `key_epoch`, `deadline_monotonic_ns` | Windows must initiate the next epoch |
 | `event.stream.rekeyed` | `stream_id`, `old_key_epoch`, `key_epoch`, `first_media_timestamp` | Sender switched at a continuous media boundary |
-| `event.driver.state` | `state`, `reason` | Endpoint availability changed |
+| `event.output.state` | `state`, `reason` | Apple output availability changed |
 | `event.session.expiring` | `reason`, `deadline_monotonic_ns` | reconnect before key/session limit |
 
 `OK` is never an error. Defined error codes are `BAD_REQUEST`, `UNSUPPORTED_VERSION`,

@@ -98,9 +98,9 @@ logging, and UI work never run on a bridge reader or audio callback. Every hando
 has a fixed queue and metric.
 
 On bridge epoch change, the service discards conversion/send queues and marks a
-discontinuity. It never mixes epochs. It binds TCP and establishes the local bridge
-before advertising mDNS. Shutdown stops starts, announces stops where possible,
-withdraws discovery, closes its bridge handle, and leaves the driver independent.
+discontinuity. It never mixes epochs. It establishes the local bridge before opening
+a configured Apple-server connection. Shutdown stops streams, announces stops where
+possible, closes its bridge handle, and leaves the driver independent.
 
 ## Security and failures
 
@@ -121,7 +121,7 @@ limited counters.
 
 | Failure | Driver | Service/network |
 | --- | --- | --- |
-| Mac disconnect | Continue endpoint/bridge discard | Stop stream and erase session keys |
+| Apple output-server disconnect | Continue endpoint/bridge discard | Stop stream and erase session keys |
 | UDP blocked | Continue | Path failure; no TCP audio fallback |
 | Service crash | No-reader state; continue | Restart policy; fresh sessions |
 | Service behind | Drop old complete blocks | Record loss; discard stale send queue |

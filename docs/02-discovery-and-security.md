@@ -19,23 +19,26 @@ traffic volume, or protect a compromised computer, account, or private identity 
 
 ## 2. Interface and firewall policy
 
-The service is disabled on every interface until enabled by the local user. Initial
+The Apple output server is disabled on every interface until enabled by the local user. Initial
 setup MUST enable only OS-classified private/home/work interfaces. Public,
 captive-portal, guest, unclassified, VPN, tunnel, virtual, and metered cellular
 interfaces MUST remain disabled until the user explicitly enables that interface.
 
 Configuration stores allowlisted stable OS interface IDs, never IP addresses or
 display names, plus an `allow_public_networks` flag that defaults false. On loss of
-eligibility or allowlisting, the service MUST immediately stop advertisements, close
+eligibility or allowlisting, the Apple output server MUST immediately stop advertisements, close
 TCP and UDP sockets on that interface, discard its paths, and terminate its streams.
 The peer may reconnect only through an eligible interface and a new control session.
 
-The service MUST bind listeners and UDP sockets only to eligible allowlisted
-interfaces. The installer MUST create firewall rules scoped to those interfaces and
-profiles, never an any-interface or public-profile inbound rule. Loopback is permitted
-only for a separate local test mode and MUST NOT advertise DNS-SD. Discovery, listener,
-and UDP exposure may be disabled independently; disabling the listener also disables
-advertisements that name it.
+The Apple output server MUST bind listeners and UDP sockets only to eligible
+allowlisted interfaces. Its platform firewall/network permissions MUST be scoped to
+those interfaces and profiles, never an any-interface or public-profile inbound rule.
+Loopback is permitted only for a separate local test mode and MUST NOT advertise
+DNS-SD. Discovery, listener, and UDP exposure may be disabled independently;
+disabling the listener also disables advertisements that name it. Windows is a
+discovery consumer and outbound client; its configured source interface is subject to
+the same eligibility checks but it advertises no DNS-SD record and accepts no inbound
+control listener in v1.
 
 ## 3. DNS-SD / mDNS discovery
 
@@ -82,31 +85,31 @@ critical extensions are invalid.
 
 The canonical peer identifier is `SHA-256(SPKI-DER)`, encoded lowercase base32 without
 padding. It is never advertised and appears only in the authenticated pairing UI.
-A Windows service also generates `server_id`, a CSPRNG UUIDv4, on its first successful
-initialization. It persists the value in service-identity-protected local storage and
+An Apple output server also generates `server_id`, a CSPRNG UUIDv4, on its first successful
+initialization. It persists the value in server-identity-protected local storage and
 never derives it from the computer name, account, mDNS label, address, port, hardware
 serial, or certificate. It MUST NOT advertise `server_id` in mDNS, logs, or an
-unauthenticated control response. The service returns it only after mutual TLS and
-local trust authorization. A Mac treats it as a stable server-selection value, never
+unauthenticated control response. The Apple output server returns it only after mutual TLS and
+local trust authorization. Windows treats it as a stable server-selection value, never
 as proof of identity; the pinned SPKI and permissions remain the trust decision.
-Generation and persistence MUST complete atomically before the service listens,
+Generation and persistence MUST complete atomically before the Apple output server listens,
 advertises, or accepts a control connection. If protected persistence cannot be
-established or read, the service MUST fail closed rather than operate with a transient
+established or read, the Apple output server MUST fail closed rather than operate with a transient
 identity.
 
 Installation from a cloned system image MUST regenerate `server_id` before enabling
-the service. Install/repair tooling exposes an explicit `reset server identity`
-operation that requires local administrator confirmation, stops active streams,
+the Apple output server. Install/repair tooling exposes an explicit `reset server identity`
+operation that requires local owner confirmation, stops active streams,
 generates a new UUID, and records that existing client configurations must be paired
 or selected again. The implementation must not claim it can reliably detect every
 disk/image clone automatically.
 
 The identity lifecycle is explicit. If the protected value is absent but protected
-storage is working, the service treats that as identity loss: it generates and
+storage is working, the Apple output server treats that as identity loss: it generates and
 persists a new value, does not retain the old value as an alias, and requires every
-configured Mac to be locally updated and paired/selected again. If storage is
-unreadable, corrupted, or unavailable, the service fails closed until a local
-administrator explicitly repairs storage or resets server identity; it must not guess
+configured Windows client to be locally updated and paired/selected again. If storage is
+unreadable, corrupted, or unavailable, the Apple output server fails closed until a local
+owner explicitly repairs storage or resets server identity; it must not guess
 whether an old identity is still valid. A deliberate reset has the same client-facing
 result as identity loss.
 Restoring the protected value from a backup restores the original server identity
@@ -114,8 +117,8 @@ only when that backup represents the same physical/logical server installation; 
 does not require reconfiguration on clients that already store that value. It does
 not bypass SPKI pin validation or restore a replaced peer key. Restoring the same
 backup onto a different server, or any cloned image, MUST regenerate the value before
-network service is enabled, since two simultaneous installations MUST NOT share a
-`server_id`. If a client sees an authenticated but unexpected value, it MUST close
+network server is enabled, since two simultaneous installations MUST NOT share a
+`server_id`. If Windows sees an authenticated but unexpected value, it MUST close
 the connection before binding or streaming and require local user action to replace
 its configured server identity.
 
@@ -126,28 +129,33 @@ local policy, not claims: `connect`, `view_status`, `receive_system_audio`,
 Forgetting or revoking `connect` immediately closes sessions, invalidates media keys,
 and removes paths.
 
+For the fixed v1 Windows-to-Apple stream, the Apple output server grants
+`receive_system_audio` and `view_status` to the paired Windows client; Windows needs
+only its local `connect` trust record for the selected Apple server. The future input
+permissions have no v1 effect. A permission on one peer never grants a permission on
+the other.
+
 `receive_system_audio` is persistent authorization, not a hidden background grant.
-Every active stream MUST produce a local, user-visible streaming indicator that names
-the locally assigned peer label and offers `Stop stream` and `Revoke peer` actions.
-Because a Windows service cannot reliably display user-session UI, it requests this
-indicator from a signed-in companion UI and waits for that UI's ready acknowledgement
-before the first audio packet. A service without a companion UI rejects `stream.open`
-unless a local administrator has explicitly enabled headless streaming; headless mode
-records active-stream state in the local event log and configuration UI. A local user
-may globally disable new stream starts; that setting is persistent, defaults enabled
-after an explicit pairing grant, and causes new `stream.open` requests to return
-`FORBIDDEN`. V1 does not require approval for every reconnect, but its persistent
-authorization is always inspectable and revocable.
+Every active stream MUST produce a local, user-visible streaming indicator in the
+Apple output app that names the locally assigned Windows peer label and offers `Stop
+stream` and `Revoke peer` actions. The server waits for that app's ready acknowledgement
+before the first audio packet. An Apple output server without an available local UI
+rejects `stream.open` unless its local owner has explicitly enabled headless streaming;
+headless mode records active-stream state in its configuration UI. A local owner may
+globally disable new stream starts; that setting is persistent, defaults enabled after
+an explicit pairing grant, and causes new `stream.open` requests to return `FORBIDDEN`.
+V1 does not require approval for every reconnect, but its persistent authorization is
+always inspectable and revocable.
 
 Unpaired devices may discover one another but cannot obtain a TLS session. Pairing
 is deliberately not a network protocol in v1. Before connecting, each side displays
-its protocol version and exact 52-character `peer_id`. An administrator transfers
+its protocol version and exact 52-character `peer_id`. An authorized local user transfers
 that value to the other machine through an independently authenticated channel or
 by physically scanning a local QR code. The QR code contains only the fixed format
 identifier, protocol major, and raw 32-byte SPKI digest; scanning merely fills the
 local approval form.
 
-At each machine an administrator compares the complete identifier, explicitly
+At each machine an authorized local user compares the complete identifier, explicitly
 approves it, chooses permissions, and atomically persists the trust record before
 the first connection. Both machines must complete this local action. The transfer,
 comparison, and approval are outside GhostMedia's network protocol, so no unknown
@@ -226,7 +234,7 @@ media_key = output[0..31]; path_key = output[32..63]
 ```
 
 SPKI values are 32-byte SHA-256 digests in packet-direction order. `direction` is
-one byte: `01` for Windows-to-Mac and `02` for Mac-to-Windows. For a direction,
+one byte: `01` for Windows-to-Apple and `02` for Apple-to-Windows. For a direction,
 the first digest is the negotiated sender and the second is the negotiated receiver;
 both endpoints use the same `media_key` for that direction and epoch. The opposite
 direction and every new epoch have distinct contexts and independently derived keys.

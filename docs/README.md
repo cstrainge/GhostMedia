@@ -5,8 +5,9 @@ These documents define the intended implementation; they do not claim that a
 driver, service, client, or tested network stack already exists.
 
 GhostMedia presents a persistent Windows playback device and delivers its audio
-to a Mac over the network. Windows development belongs in `WinDevice/`. The
-macOS application belongs in `Mac Client/` and will be built on a Mac later.
+to a configured Apple output server over the network. Windows development belongs in
+`WinDevice/`. The macOS application belongs in `Mac Client/`; an iOS application
+uses the same output-server role.
 Microphone input and webcam input are future extensions, not version 1 features.
 
 ## Read in this order
@@ -50,14 +51,14 @@ not permission for each platform to select its own interpretation.
 | Area | Decision |
 | --- | --- |
 | Discovery | mDNS with DNS-SD service `_ghostmedia._tcp.local.` |
-| Server | Windows user-mode service advertises and accepts TCP |
-| Client | Mac browses, connects, and coordinates stream lifecycle |
+| Server | macOS/iOS output app advertises and accepts TCP |
+| Client | Windows service browses configured servers, connects, and coordinates stream lifecycle |
 | Control | Length-prefixed UTF-8 JSON over mutually pinned TLS 1.3 over TCP |
 | Media | Custom GMA/1 datagrams over unicast UDP, directional AES-256-GCM protected |
 | Required audio | 48 kHz, stereo, signed 16-bit little-endian PCM, 5 ms packets |
 | Optional audio | Explicitly advertised Opus stereo, 48 kHz clock, 10 ms packets |
 | Network scope | One directly reachable peer; LAN first; no relay or NAT traversal |
-| Routing | One active Mac audio subscriber per Windows service in v1 |
+| Routing | One configured Apple output server per Windows service in v1 |
 | Driver behavior | Device remains present and advances independently of consumers |
 | Recovery | Fresh session, keys, stream IDs, and playout buffer after reconnect |
 | Trust bootstrap | Bilateral local approval of full SPKI fingerprints via an independent channel; no TOFU |

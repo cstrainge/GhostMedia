@@ -2,21 +2,21 @@
 
 ## State machines
 
-Windows service session states are `LISTENING -> TLS -> HELLO -> BOUND ->
+Apple output-server session states are `LISTENING -> TLS -> HELLO -> BOUND ->
 STREAM_OPEN -> PATH_VALIDATED -> STREAMING -> STREAM_OPEN`, with `CLOSED` reachable
 from every state. `STREAM_OPEN` means reserved but silent. Any TLS/control failure
 goes directly to `CLOSED`: stop streams, release subscriber ownership, erase keys,
-and retain driver/discovery operation. Mac follows the same control states but
-begins TCP and makes lifecycle requests.
+and retain driver operation. Windows follows the same control states but begins TCP
+and makes lifecycle requests.
 
-The Mac media receiver states are `IDLE -> PRIMING -> PLAYING -> REPRIMING`, then
+The Apple output-server media receiver states are `IDLE -> PRIMING -> PLAYING -> REPRIMING`, then
 back to `IDLE` on stop/close. A successful `stream.start` triggers `PRIMING`; it
 does not mean samples are audible. A valid packet never moves state from `IDLE`
 without control authorization. `PLAYING` can render concealment/silence on loss.
 
 ```text
-Mac: discover -> TCP/TLS -> hello -> bind -> open -> per-stream path challenge -> start
-Win: advertise -> accept TLS -> hello -> bind -> open -> per-stream path challenge -> start
+Win: discover configured server -> TCP/TLS -> hello -> bind -> open -> path challenge -> start
+Apple: advertise -> accept TLS -> hello -> bind -> open -> per-stream path challenge -> start
                        \-----------------------------------------------/
                               control owns all transitions
 UDP:             cannot create/change stream; only probes, audio, feedback
@@ -24,42 +24,46 @@ UDP:             cannot create/change stream; only probes, audio, feedback
 
 ## Reconnection and restart
 
-The Mac may reconnect after terminal failure with exponential backoff: random delay
+Windows may reconnect after terminal failure with exponential backoff: random delay
 uniformly chosen in `[0, 250]` ms for first retry, then a multiplier of 1.5 to 2.0,
 capped at 10 seconds. Reset backoff only after a session has streamed for 30 seconds.
 It must resolve the current mDNS/manual address again, perform TLS pin validation,
 and create a fresh session. It MUST NOT reuse session IDs, UDP keys, packet indices,
 stream IDs, jitter packets, outstanding probes, or an unknown old request outcome.
 
-Windows service restart generates a new `boot_id`, listener/session material, and
-bridge epoch. It may keep its long-term identity and mDNS instance. Mac detects a
-changed boot ID only after new authenticated hello; it flushes all old media. Driver
-restart/format loss stops existing streams with a state event where possible. Mac
-output route/rate changes flush/reprime locally and keep control only if its output
-continues; otherwise feedback indicates loss and Windows stops after timeout.
+Windows service restart generates a new bridge epoch and client session material.
+The Apple output server generates a new `boot_id` on restart and may keep its
+long-term identity and mDNS instance. Windows detects a changed boot ID only after
+new authenticated hello; the Apple output server flushes all old media. Driver
+restart/format loss stops existing streams with a state event where possible. Apple
+system-default output route/rate changes flush/reprime locally and keep control only
+if its output continues; otherwise feedback indicates loss and Windows stops after
+timeout. Such a local route change never changes `server_id` or requires Windows
+reconfiguration.
 
-The service subscribes to local interface, address, route, and firewall-profile
+The Apple output server subscribes to local interface, address, route, and firewall-profile
 changes. Each advertised TCP listener and UDP tuple is bound to a concrete interface
 and address family. On loss of that interface, address, route, or permission to use
-it, the service immediately withdraws its affected DNS-SD record, stops accepting on
+it, the server immediately withdraws its affected DNS-SD record, stops accepting on
 the affected listener, invalidates affected UDP path validation, and stops each
 affected stream with `NETWORK_INTERFACE_LOST`. It erases its media keys when the
 corresponding session closes. It MUST NOT silently migrate an authenticated session
-to a newly selected interface or source address: the Mac discovers/resolves again,
+to a newly selected interface or source address: Windows discovers/resolves again,
 performs a fresh TLS session and UDP path validation, then opens a new stream. An
 address change on a still-present interface follows the same rule unless a new,
 authenticated `transport.bind` is completed within the existing TLS session and
 both peers explicitly support `path_rebind`; v1 does not negotiate `path_rebind`.
 
-On a firewall profile becoming public, a service using the default private-network
+On a firewall profile becoming public, an Apple output server using the default private-network
 policy withdraws all public-interface advertisements and terminates streams on those
 interfaces. It keeps unaffected private-interface sessions only if their exact bound
 interface and address remain valid. Interface changes are coalesced for 250 ms for
 advertisement updates, but media path invalidation and stream stop are immediate.
 
-When the session-expiry threshold approaches, Windows sends `event.session.expiring`
-at least 30 seconds before deadline. Mac stops/closes then reconnects. If no fresh
-session exists by deadline, Windows stops the stream and closes the session. Key
+When the session-expiry threshold approaches, the Apple output server sends
+`event.session.expiring` at least 30 seconds before deadline. Windows stops/closes
+then reconnects. If no fresh session exists by deadline, the Apple output server
+stops the stream and closes the session. Key
 limits always override attempts to avoid an interruption.
 
 ## Central limits
@@ -71,7 +75,7 @@ limits always override attempts to avoid an interruption.
 | control frame | 2..65,536 UTF-8 bytes |
 | queued parsed control frames | 16 |
 | pending requests | 4; mutating requests serial |
-| active stream subscribers | 1 per Windows service |
+| active stream subscribers | 1 per Apple output server |
 | active TCP sessions | 4 authenticated sessions |
 | driver bridge capacity / freshness threshold | 100 ms / 50 ms; discard oldest complete data above freshness threshold |
 | service send capacity / freshness threshold | 40 ms / 20 ms; discard oldest complete data above freshness threshold |

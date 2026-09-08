@@ -3,12 +3,22 @@
 ## 1. Product contract
 
 The user selects **GhostMedia Speakers** as a Windows playback device. Applications
-render through the normal Windows audio stack. A Windows user-mode service takes
-the resulting PCM audio and streams it to the selected Mac. The Mac plays it
-through a user-selected local output device.
+render through the normal Windows audio stack. In Windows Control Panel, the user
+selects one configured Apple output server (a macOS or iOS GhostMedia app). The
+Windows user-mode service takes the resulting PCM audio and streams it to that
+server, which plays it through the Apple system's currently configured default output.
+
+The Control Panel discovers candidate Apple servers and supports local pairing and
+selection. It persists the selected server's stable ID and approved SPKI; its shown
+network name is a routing label only. The Windows driver/service never accepts an
+inbound GhostMedia control connection in v1.
+
+The protocol neither enumerates nor selects Apple-attached output devices. A local
+system-output change is handled entirely by the Apple output server and never changes
+the configured GhostMedia server identity.
 
 The Windows endpoint MUST remain usable without a running service, a configured
-peer, a TCP connection, a UDP path, or an available Mac output device. Loss of any
+peer, a TCP connection, a UDP path, or an available Apple output device. Loss of any
 of those components changes remote availability, not Windows device presence.
 This guarantee covers designed software behavior. It is not a claim that kernel
 bugs, hardware faults, operating-system failure, or driver removal cannot occur.
@@ -20,23 +30,27 @@ Windows application
     -> Windows audio engine
     -> WinDevice virtual render driver
     -> bounded driver-owned PCM bridge
-    -> WinDevice user-mode streaming service
-       | mDNS/DNS-SD advertisement
+    -> WinDevice user-mode streaming client
        | TLS/TCP: trust, negotiation, lifecycle, feedback, clock samples
        | protected UDP: path probes, paced audio
        v
-    Mac Client: decrypt -> reorder/jitter buffer -> resample -> Core Audio
+    Apple Output Server: mDNS/DNS-SD advertisement
+       -> decrypt -> reorder/jitter buffer -> resample -> platform audio output
 ```
 
 | Component | Owns | Must not depend on |
 | --- | --- | --- |
 | Driver | Endpoint, render clock, bounded bridge, local counters | Sockets, TLS, codecs, UI, remote consumption |
-| Windows service | Discovery, identity, TCP sessions, UDP keys, packetizer | Mac availability for driver progress |
-| Mac client | Selection, control coordination, UDP receive, playout clock | Arrival of one packet per output callback |
-| Windows UI | Trust decisions, configuration, status | Participation in real-time processing |
+| Windows service | Configured-server selection, TCP client sessions, UDP keys, packetizer | Apple availability for driver progress |
+| Apple output server | Discovery, identity, TCP listener, UDP receive, playout clock | Arrival of one packet per output callback |
+| Windows Control Panel | Server selection, trust decisions, configuration, status | Participation in real-time processing |
 
 `WinDevice/` will contain Windows-only driver, service, and supporting UI/build
-code. `Mac Client/` will contain the macOS application. The protocol specification
+code. `Mac Client/` will contain the macOS application; an iOS implementation follows
+the same Apple output-server role while its app is active. When an iOS app cannot
+continue its listener or audio output under the operating system's lifecycle rules,
+it withdraws discovery and stops the active stream; Windows reconnects only after the
+app is available again. The protocol specification
 and cross-platform wire fixtures live under `docs/`; neither implementation is
 the authority for correcting a disagreement with this specification.
 
@@ -56,10 +70,11 @@ the authority for correcting a disagreement with this specification.
 
 ## 4. Baseline and exclusions
 
-Version 1 supports one Windows render endpoint, one Mac receiver, and one active
-Windows-to-Mac audio stream. Up to four authenticated TCP sessions may inspect
-state; only one can own the audio subscription. Opening the stream acquires that
-ownership. A competing open returns `RESOURCE_BUSY`; it never ejects the owner.
+Version 1 supports one Windows render endpoint, one selected Apple output server,
+and one active Windows-to-Apple audio stream. Up to four authenticated TCP sessions
+may inspect state; only one can own the audio subscription. Opening the stream
+acquires that ownership. A competing open returns `RESOURCE_BUSY`; it never ejects
+the owner.
 
 The baseline is 48,000 sample frames/second, channels `[FL, FR]`, PCM signed 16-bit
 little-endian, 240 frames/datagram. One sample frame contains one sample from
@@ -77,7 +92,7 @@ manually may work over routed networks, but all v1 transport limits still apply.
 | Name | Encoding | Scope and assignment |
 | --- | --- | --- |
 | `peer_id` | 52 lowercase unpadded base32 characters | SHA-256 of identity public key's DER SubjectPublicKeyInfo; persists with key and is never advertised |
-| `server_id` | Lowercase UUID with hyphens | CSPRNG installation identity for one Windows GhostMedia service; persists across hostname, mDNS-label, address, and certificate renewal changes |
+| `server_id` | Lowercase UUID with hyphens | CSPRNG installation identity for one Apple GhostMedia output server; persists across hostname, mDNS-label, address, and certificate renewal changes |
 | `endpoint_id` | Lowercase UUID with hyphens | Windows endpoint identity, persists across service restart |
 | `boot_id` | Lowercase UUID with hyphens | New random UUID each service process start |
 | `session_id` | 32 lowercase hex characters / 16 raw bytes | Windows CSPRNG; new per accepted hello |
@@ -94,14 +109,14 @@ source with UUID version/variant bits. The peer identifier is an authenticated
 pairing-only value; hexadecimal IDs have no prefix or separators unless UUID syntax
 is explicitly required.
 
-`server_id` is the client's stable configured-server selector, not an authorization
-credential or network address. A Mac stores it alongside the locally approved peer
-identity. On the first successful authorized session after local pairing, the Mac
-atomically binds the authenticated hello's `server_id` to that approved SPKI. On
-every later connection, discovery finds candidate routes and the Mac accepts a
-candidate only when both TLS pin validation succeeds and its authenticated
+`server_id` is the Windows client's stable configured-server selector, not an
+authorization credential or network address. Windows stores it alongside the locally
+approved Apple-server peer identity. On the first successful authorized session after
+local pairing, Windows atomically binds the authenticated hello's `server_id` to that
+approved SPKI. On every later connection, discovery finds candidate routes and
+Windows accepts a candidate only when both TLS pin validation succeeds and its authenticated
 `server_id` equals the configured value. A changed computer name, DNS-SD instance
-label, address, port, or renewed same-key certificate therefore cannot make the Mac
+label, address, port, or renewed same-key certificate therefore cannot make Windows
 select a different configured server. Loss or intentional reset of the persisted
 server ID is a replacement-server event and requires local reconfiguration.
 
@@ -111,16 +126,16 @@ system's appropriate monotonic/performance counter independently of the session.
 
 ## 6. Authority and transactions
 
-The Windows service is authoritative for endpoint availability, current subscriber,
-stream allocation, and negotiated state. The Mac is authoritative for its local
-output availability and actual playout statistics. Neither may fabricate the
+The Windows service is authoritative for endpoint availability and source audio. The
+Apple output server is authoritative for its current subscriber, stream allocation,
+negotiated state, local output availability, and actual playout statistics. Neither may fabricate the
 other's observations. Status distinguishes `control_connected`, `path_validated`,
 `stream_active`, and `audio_audible`; active packets do not prove audible output.
 
-The Mac initiates all lifecycle operations. Either side can ping or close a session.
-Windows may stop a stream on failure and announces this in an event. A request
+Windows initiates all lifecycle operations. Either side can ping or close a session.
+Either side may stop a stream on failure and announces this in an event. A request
 response describes a committed state transition; sending a request is not evidence
-that it committed. If the connection fails before a response, the Mac considers
+that it committed. If the connection fails before a response, Windows considers
 the result unknown and discards the session. It does not replay the mutation on
 a new session as though it were the same transaction.
 
@@ -133,7 +148,7 @@ These are targets to measure, not guarantees inferred from transport choice:
 - Driver bridge capacity/freshness: 100/50 ms; service send capacity/freshness:
   40/20 ms. Both discard oldest complete blocks above the freshness threshold.
 - Healthy LAN target: less than 100 ms end-to-end at the 95th percentile, measured
-  from Windows render presentation to analog/digital output on the Mac.
+  from Windows render presentation to analog/digital output on the Apple device.
 - Remote disappearance: driver continues indefinitely; network session is cleaned
   up within the heartbeat timeout when no valid control messages arrive.
 

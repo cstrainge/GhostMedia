@@ -5,7 +5,7 @@
 The Windows service converts the driver's local bridge PCM to the negotiated
 network profile. It uses a fixed, testable channel matrix and sample-rate
 conversion. Baseline output is stereo: mono duplicates to L/R, and surround uses
-a documented downmix. Windows mix negotiation handles endpoint formats; the Mac
+a documented downmix. Windows mix negotiation handles endpoint formats; the Apple output server
 does not negotiate the driver's native format.
 
 `pcm_s16le` samples are signed, interleaved, little-endian two's-complement values
@@ -25,11 +25,11 @@ The Windows source timeline is u64 sample frames at the negotiated sample rate.
 advances by `frames_per_packet` through silence and dropped blocks. It resets only
 with new stream/session state, so a stream ID defines its epoch.
 
-The Mac tracks source timestamp, its receive monotonic clock, and its output-device
+The Apple output server tracks source timestamp, its receive monotonic clock, and its output-device
 clock. Clocks have no shared origin or guaranteed equal rate. `monotonic_ns` is
 diagnostic/liveness data and is never subtracted between machines.
 
-After `stream.start`, the Mac primes from the first valid packet until it has the
+After `stream.start`, the Apple output server primes from the first valid packet until it has the
 accepted playout target, then sets expected timestamp to the first packet. A gap
 over 120 ms, timestamp regression, or declared discontinuity flushes and reprimes.
 Initial prime wait is capped at 500 ms; thereafter it reports output loss instead
@@ -37,7 +37,7 @@ of retaining stale data.
 
 ## Drift and latency
 
-The Mac keeps jitter occupancy near target with a slow adaptive resampler after
+The Apple output server keeps jitter occupancy near target with a slow adaptive resampler after
 decode. It derives correction from mean occupancy error over a 2-second window,
 not individual packet arrival. Default correction is 0.5 ppm per millisecond of
 error, limited to +/-200 ppm. Another stable controller is allowed but correction
@@ -61,7 +61,7 @@ following separately measured or estimated components in every status snapshot:
 | Network transit | informational | One-way delay is an estimate unless clocks have been explicitly synchronized. |
 | Receiver jitter target | 30 ms default, 15..120 ms | First accepted media frame to playout eligibility; measured from source timestamp and receiver clock discipline. |
 | Decode/resample and callback handoff | <= 10 ms for PCM | Receiver-local processing to submission to the output callback. Opus reports its algorithmic delay separately. |
-| Mac output/device latency | route supplied | Core Audio reported device latency plus safety offset; it may exceed the local-LAN objective. |
+| Apple output/device latency | route supplied | Platform-reported device latency plus safety offset; it may exceed the local-LAN objective. |
 
 The product reports the sum only when each locally measurable component is present.
 It labels the result `estimated_end_to_end_latency` and includes an `unknown` flag
@@ -90,7 +90,9 @@ reconfiguration, logging pressure, and a 50 ms service scheduling pause; those t
 may revise capacities only after the latency budget is revised with them.
 
 Digital silence is zero PCM. Windows mixer volume/mute acts before the bridge;
-Mac output volume remains local. A service discontinuity occurs after bridge reopen,
+Apple output volume remains local. The Apple output server follows the system default
+output and does not expose remote device enumeration or route selection. A service
+discontinuity occurs after bridge reopen,
 conversion reset, stream restart, or dropping at least 120 ms; it flushes state and
-requires a new start transaction. Mac discontinuities include route/rate change,
+requires a new start transaction. Apple-output discontinuities include route/rate change,
 reprime, start/stop/close, and source-timestamp anomaly.

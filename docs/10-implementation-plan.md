@@ -13,9 +13,9 @@ callback problem from concealing a protocol defect.
 
 ```text
 shared core + fake transport
-  -> Windows service <=> Mac CLI receiver
-  -> Windows service <=> Mac Core Audio receiver
-  -> Windows WaveRT bridge <=> service <=> Mac Core Audio receiver
+  -> Windows service client <=> Mac CLI output server
+  -> Windows service client <=> Mac Core Audio output server
+  -> Windows WaveRT bridge <=> service client <=> Mac Core Audio output server
 ```
 
 Microphone and camera work begins only after the render path passes Phase 6.
@@ -25,12 +25,12 @@ Microphone and camera work begins only after the render path passes Phase 6.
 | Area | Owns | Must not own |
 | --- | --- | --- |
 | Shared core | Wire schema, serialization, packet validation, protocol states, crypto input construction, replay/jitter/queue policy, timing arithmetic, metrics | Sockets, TLS engine, threads, UI, device APIs |
-| Windows userspace | Service, Winsock/TLS/mDNS adapters, driver bridge client, conversion/pacing workers, configuration | Kernel render timing or a protocol fork |
+| Windows userspace | Service, Winsock/TLS/DNS-SD browse adapters, driver bridge client, conversion/pacing workers, Control Panel configuration | Kernel render timing or a protocol fork |
 | Windows driver | WaveRT endpoint, render clock, bounded bridge, PnP lifecycle | Network, TLS, codecs, mDNS, UI |
-| macOS userspace | Swift app, trust store, DNS-SD, socket/TLS adapters, receiver workers, configuration | Protocol parsing or Core Audio callback work |
+| macOS/iOS userspace | Apple output app, trust store, DNS-SD advertisement, socket/TLS listener adapters, receiver workers, configuration | Protocol parsing or platform audio callback work |
 | macOS Core Audio / AVFoundation | Core Audio output callback, output route/rate handling; future AVFoundation capture | Transport, TLS, wire state, encryption |
 
-V1 Mac output uses Core Audio. The callback only pulls decoded PCM from a
+V1 macOS output uses Core Audio. The callback only pulls decoded PCM from a
 preallocated ring and supplies silence on underflow. Packet receive, decrypt,
 decode, resampling, logging, Swift allocation, and locks stay off that callback.
 
@@ -174,13 +174,14 @@ first shipped implementation advertises PCM only. Opus remains disabled until a
 pinned shared decoder/PLC implementation or byte-identical codec-adapter contract
 passes golden decode and loss-concealment fixtures on both platforms.
 
-**Windows:** service identity key, self-signed Ed25519 leaf, persistent CSPRNG server
-ID, local trust records, and a TLS adapter that enforces the exact leaf-only
-mutual-auth/exporter policy.
+**Windows:** client identity key, self-signed Ed25519 leaf, local trust records, and
+a TLS adapter that enforces the exact leaf-only mutual-auth/exporter policy.
 
-**macOS:** equivalent Keychain/trust adapter and TLS adapter. If Network.framework
-cannot expose the mandated validation/exporter behavior, use a vetted lower-level
-TLS library behind the same interface; never weaken the protocol to fit an API.
+**macOS/iOS:** output-server identity key, self-signed Ed25519 leaf, persistent
+CSPRNG server ID, trust records, and a TLS listener adapter. If platform TLS APIs
+cannot expose the mandated validation/exporter behavior, use a vetted lower-level TLS
+library behind the same interface; never weaken the protocol to fit an API. The iOS
+implementation must withdraw discovery and stop streams when it cannot remain active.
 
 **Synchronization:** satisfy G2. Publish vectors for peer ID, server-ID encoding and
 mismatch handling, exporter input, epoch, direction, nonce, header, AAD, ciphertext,
@@ -198,22 +199,23 @@ certificate shortcuts, and test-key leakage in logs.
 
 ## Phase 3 — first transport vertical slice
 
-**Goals:** demonstrate secure Windows-to-Mac UDP audio without a virtual driver or
+**Goals:** demonstrate secure Windows-to-Apple UDP audio without a virtual driver or
 Core Audio output.
 
-**Components:** Windows console service, macOS CLI receiver, mDNS/TCP/TLS/UDP
+**Components:** Windows console client, macOS CLI output server, mDNS/TCP/TLS/UDP
 adapters, synthetic PCM source/sink.
 
 **Shared core:** drive hello, bind, stream open, path challenge, start, feedback,
 rekey, stop, close, interface-loss actions, and metrics. Adapters transmit core
 bytes unchanged.
 
-**Windows:** advertise only on an explicitly enabled private interface. Generate
-48 kHz stereo sine/silence PCM, packetize through core, and enforce admission limits
-before TLS allocation. No driver code.
+**Windows:** browse configured Apple servers only on an explicitly enabled private
+interface. Generate 48 kHz stereo sine/silence PCM, packetize through core, and
+enforce client-side connection limits. No driver code.
 
-**macOS:** browse or manually target Windows, use preapproved trust, decrypt/reorder
-through core, print metrics, and drain decoded PCM into a deterministic discard sink.
+**macOS:** advertise or accept a manually configured Windows client, use preapproved trust,
+decrypt/reorder through core, print metrics, and drain decoded PCM into a deterministic
+discard sink.
 
 **Synchronization:** satisfy G4 and G5 with captured successful/failed traces;
 agree on mDNS privacy, tuple/interface selection, reconnect, and timestamp inputs.
@@ -282,7 +284,7 @@ network, queue overflow, simulated bridge restart, and impulse-based latency rep
 **Risks/traps:** timestamping pre-conversion frames as 48 kHz, per-packet allocation,
 priority starvation, and buffering that hides latency.
 
-**Deliverable:** service streams simulated real-format source to audible Mac output.
+**Deliverable:** service streams simulated real-format source to audible Apple output.
 
 ## Phase 6 — Windows virtual render driver and bridge
 
