@@ -1,0 +1,4 @@
+module GhostMediaCore {
+    header "ghostmedia/gm_core.h"
+    export *
+}
