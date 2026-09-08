@@ -21,7 +21,9 @@ Expected tests:
 
 ```text
 gm_core_tests
+gm_phase2_vectors_tests
 gm_core_c_abi_tests
+win_crypto_provider_tests
 win_control_probe_dry_run
 ```
 
@@ -80,5 +82,6 @@ stream.open
 - Old role or direction assumptions: `gm_core` rejects the frame.
 - Any malformed result schema: the probe fails while parsing the received frame.
 
-After this passes, the next Windows-side work is the TLS/exporter adapter and media
-key/vector lock before encrypted UDP can be sent.
+After this passes, the next Windows-side work is the conformant Ed25519 TLS/exporter
+adapter and encrypted UDP sender. The shared media key, nonce, AAD, AES-GCM, replay,
+and rekey vector lock is already available through the Phase 2 tests.

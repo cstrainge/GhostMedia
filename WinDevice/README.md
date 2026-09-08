@@ -14,6 +14,20 @@ starter for the future service host. The WaveRT driver project is intentionally
 not scaffolded yet; the protocol core and userspace vertical slice should build
 and pass tests before WDK driver work begins.
 
+`GhostMediaWinSecurity` under `security/` is the first Windows-side Phase 2
+adapter. It uses Windows BCrypt for AES-256-GCM and relies on the shared core for
+key, nonce, AAD, payload, tag, replay, and epoch validation. It does not implement
+the v1 Ed25519 TLS identity adapter yet; the installed Windows SDK headers in this
+environment do not expose CNG/NCrypt Ed25519 constants, so that adapter needs an
+external TLS/crypto provider choice or newer platform support.
+
+Phase 2 local smoke:
+
+```powershell
+$ctest = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe"
+& $ctest --preset windows-msvc -R '^(gm_phase2_vectors_tests|win_crypto_provider_tests)$' --output-on-failure
+```
+
 ## First Mac interop probe
 
 `GhostMediaWinControlProbe` under `tools/control_probe/` is the Windows-side

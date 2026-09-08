@@ -3,8 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace {
+constexpr uint64_t kRekeyGraceNs = static_cast<uint64_t>(GM_REKEY_GRACE_MS) * 1000ull * 1000ull;
+
 bool has_readable_data(gm_bytes bytes) {
     return bytes.size == 0 || bytes.data != nullptr;
 }
@@ -248,5 +251,58 @@ gm_status gm_replay_window_accept(gm_replay_window *window, uint64_t sequence, u
 
     set_bit(window->bitmap, delta);
     *out_result = GM_REPLAY_ACCEPTED;
+    return GM_OK;
+}
+
+gm_status gm_epoch_window_init(gm_epoch_window *window, uint32_t initial_epoch) {
+    if (window == nullptr || window->struct_size < sizeof(gm_epoch_window)) {
+        return GM_BAD_ARGUMENT;
+    }
+    if (initial_epoch == 0u) {
+        return GM_BAD_MESSAGE;
+    }
+    const size_t caller_size = window->struct_size;
+    std::memset(window, 0, sizeof(gm_epoch_window));
+    window->struct_size = caller_size;
+    window->abi_version = GM_ABI_VERSION;
+    window->current_epoch = initial_epoch;
+    return GM_OK;
+}
+
+gm_status gm_epoch_window_begin_rekey(gm_epoch_window *window, uint32_t new_epoch, uint64_t now_ns) {
+    if (window == nullptr || window->struct_size < sizeof(gm_epoch_window) || window->abi_version != GM_ABI_VERSION) {
+        return GM_BAD_ARGUMENT;
+    }
+    if (new_epoch == 0u || window->current_epoch == 0u || new_epoch != window->current_epoch + 1u) {
+        return GM_BAD_MESSAGE;
+    }
+    window->previous_epoch = window->current_epoch;
+    window->current_epoch = new_epoch;
+    window->has_previous_epoch = 1u;
+    window->previous_epoch_expires_ns = now_ns > std::numeric_limits<uint64_t>::max() - kRekeyGraceNs
+                                            ? std::numeric_limits<uint64_t>::max()
+                                            : now_ns + kRekeyGraceNs;
+    return GM_OK;
+}
+
+gm_status gm_epoch_window_accept(const gm_epoch_window *window, uint32_t key_epoch, uint64_t now_ns,
+                                 uint32_t *out_acceptance) {
+    if (window == nullptr || out_acceptance == nullptr || window->struct_size < sizeof(gm_epoch_window) ||
+        window->abi_version != GM_ABI_VERSION || window->current_epoch == 0u) {
+        return GM_BAD_ARGUMENT;
+    }
+    if (key_epoch == 0u) {
+        return GM_BAD_MESSAGE;
+    }
+    if (key_epoch == window->current_epoch) {
+        *out_acceptance = GM_EPOCH_CURRENT;
+        return GM_OK;
+    }
+    if (window->has_previous_epoch != 0u && key_epoch == window->previous_epoch &&
+        now_ns <= window->previous_epoch_expires_ns) {
+        *out_acceptance = GM_EPOCH_PREVIOUS_GRACE;
+        return GM_OK;
+    }
+    *out_acceptance = GM_EPOCH_REJECTED;
     return GM_OK;
 }

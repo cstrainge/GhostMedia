@@ -117,24 +117,25 @@ Goal: prove authenticated transport bytes before real networking.
 
 ### Components
 
-- [ ] Crypto-layout module.
-- [ ] TLS exporter adapter interface.
-- [ ] Identity and trust adapter interfaces.
-- [ ] Machine-readable vector corpus.
-- [ ] AES-256-GCM provider adapter.
-- [ ] Epoch lifecycle tests and vectors.
-- [ ] Replay/rekey grace tests and vectors.
+- [x] Crypto-layout module.
+- [x] TLS exporter context and adapter boundary.
+- [x] Identity and trust adapter interfaces.
+- [x] Machine-readable vector corpus.
+- [x] Windows AES-256-GCM provider adapter.
+- [x] Epoch lifecycle tests and vectors.
+- [x] Replay/rekey grace tests and vectors.
 
 ### Shared core
 
 - [x] Header serialization helpers.
 - [x] Nonce construction helpers.
 - [x] Replay logic scaffold.
-- [ ] Exporter-context construction.
-- [ ] AAD construction.
-- [ ] Key length and nonce length checks.
-- [ ] AES-GCM call boundary.
-- [ ] Positive and negative crypto vectors.
+- [x] Exporter-context construction.
+- [x] AAD construction.
+- [x] Key length and nonce length checks.
+- [x] AES-GCM call boundary.
+- [x] Positive and negative crypto vectors.
+- [x] Current and previous-epoch rekey grace helper.
 
 ### Windows
 
@@ -143,6 +144,10 @@ Goal: prove authenticated transport bytes before real networking.
 - [ ] Local trust records and revocation handling.
 - [ ] TLS adapter enforcing leaf-only mutual authentication.
 - [ ] TLS exporter output supplied to the shared core.
+- [x] AES-256-GCM media/path provider adapter backed by Windows BCrypt.
+- [ ] Ed25519-capable TLS/certificate provider selected. The installed Windows SDK
+  headers do not expose CNG/NCrypt Ed25519 algorithm constants, so the conformant
+  v1 TLS adapter needs an external TLS/crypto provider or newer platform support.
 
 ### Apple output server
 
@@ -156,9 +161,9 @@ Goal: prove authenticated transport bytes before real networking.
 ### Exit checks
 
 - [ ] Bad leaf, pin, revocation, and wrong peer are rejected.
-- [ ] Windows and Apple exporter bytes match vectors.
-- [ ] Altered header, AAD, ciphertext, or tag fails.
-- [ ] Nonce uniqueness and replay edges are covered.
+- [ ] Windows and Apple TLS exporter bytes match vectors.
+- [x] Altered AAD, ciphertext, or tag fails in the Windows AES-GCM adapter test.
+- [x] Nonce construction, replay edges, and rekey grace are covered by shared tests.
 - [ ] No media key is available before an authorized stream.
 
 ## Phase 3 - first transport vertical slice

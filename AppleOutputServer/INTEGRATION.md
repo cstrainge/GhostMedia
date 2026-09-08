@@ -28,6 +28,11 @@ The Mac harness should call the C ABI directly for:
 - `gm_media_encode_header`, `gm_media_decode_header`, and `gm_media_build_nonce`
   for media byte-layout tests.
 - `gm_replay_window_init` and `gm_replay_window_accept` for replay-window checks.
+- `gm_identity_encode_peer_id`, `gm_tls_peer_policy_validate`,
+  `gm_crypto_build_exporter_context`, `gm_crypto_split_exporter_output`,
+  `gm_media_build_aad`, `gm_crypto_validate_aead_inputs`, and
+  `gm_epoch_window_accept` for Phase 2 identity, exporter, AEAD, and rekey vector
+  checks.
 
 Do not duplicate the v1 JSON schema in Swift. Swift can translate parsed ABI fields
 into local types after the shared core accepts a message.
@@ -38,7 +43,7 @@ From the repository root on macOS:
 
 ```sh
 cmake -S . -B out/build/macos -DGM_BUILD_WINDOWS=OFF -DGM_BUILD_TESTS=ON
-cmake --build out/build/macos --target gm_core gm_core_tests gm_core_c_abi_tests
+cmake --build out/build/macos --target gm_core gm_core_tests gm_core_c_abi_tests gm_phase2_vectors_tests
 ctest --test-dir out/build/macos --output-on-failure
 ```
 
@@ -69,13 +74,35 @@ results. The initial run should prove:
   rejected.
 - A Windows-to-Apple `PATH_CHALLENGE` header and Apple-to-Windows `PATH_RESPONSE`
   header encode with directions 1 and 2 respectively.
+- The Phase 2 vector file at `protocol/vectors/phase2_crypto_vectors.json` matches
+  the Swift-side peer ID, exporter-context, media AAD, nonce, key split, AES-GCM,
+  replay, and epoch-grace checks.
 
 ## Non-Goals For This Slice
 
 - No real sockets, TLS, mDNS, Keychain, Core Audio, AVFoundation, or UI.
 - No platform JSON parser for protocol acceptance decisions.
-- No AES-GCM implementation until the Phase 2 vector lock.
+- No duplicated AES-GCM, TLS exporter, or certificate-policy decisions outside the
+  Phase 2 vector contract.
 - No output device enumeration; v1 uses only the local system-default output route.
+
+## Phase 2 Mac-Side Obligations
+
+The Windows side now publishes the shared Phase 2 vector lock and a BCrypt-backed
+AES-256-GCM adapter test. The Mac side should use the same fixture corpus to verify
+its Keychain identity, TLS exporter, and CryptoKit or lower-level AES-GCM adapter:
+
+- Encode the SPKI SHA-256 digest through `gm_identity_encode_peer_id` and compare
+  the full 52-character value shown in local pairing UI.
+- After mutual TLS validation, call `gm_tls_peer_policy_validate` with facts from
+  the platform TLS/certificate verifier before exposing `server_id` or accepting
+  control frames.
+- Build exporter contexts with sender/receiver SPKI order matching packet
+  direction, then split exactly 64 exporter bytes through `gm_crypto_split_exporter_output`.
+- Use `gm_media_build_aad` and `gm_media_build_nonce` unchanged as AES-GCM AAD and
+  nonce input, and reject altered AAD, ciphertext, or tag.
+- Accept the previous key epoch only during the five-second grace reported by
+  `gm_epoch_window_accept`.
 
 ## Handshake Shape
 

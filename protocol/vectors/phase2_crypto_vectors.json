@@ -1,0 +1,79 @@
+{
+  "protocol_revision": "1.0-draft.1",
+  "purpose": "Phase 2 deterministic crypto and identity byte vectors. Fixtures contain no production identity, key, packet, or audio data.",
+  "identity": {
+    "windows_spki_sha256_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "windows_peer_id_base32": "aaaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypq",
+    "apple_spki_sha256_hex": "f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1",
+    "apple_peer_id_base32": "6dx653pm5pvot2hh43s6jy7c4hqn7xw53tn5vwoy27lnlvgt2liq"
+  },
+  "tls_exporter": {
+    "label": "EXPORTER-GhostMedia-v1",
+    "context_prefix_ascii": "ghostmedia/1",
+    "session_id_hex": "00112233445566778899aabbccddeeff",
+    "stream_id": 1,
+    "key_epoch": 1,
+    "exporter_output_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "media_key_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "path_key_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "directions": [
+      {
+        "name": "win_to_apple",
+        "direction": 1,
+        "sender_spki_sha256_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "receiver_spki_sha256_hex": "f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1",
+        "context_sha256_hex": "eae82ef20c131d0f5b03bb069b25d92b1d594ed041c02a8f474367c682087a02"
+      },
+      {
+        "name": "apple_to_win",
+        "direction": 2,
+        "sender_spki_sha256_hex": "f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1",
+        "receiver_spki_sha256_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "context_sha256_hex": "3b03b2e0f4278c33de868e66f688c0047b1ec901fe72725cad2a39b638d090a7"
+      }
+    ]
+  },
+  "media_aad": {
+    "kind": "AUDIO",
+    "session_id_hex": "00112233445566778899aabbccddeeff",
+    "stream_id": 1,
+    "direction": 1,
+    "key_epoch": 1,
+    "sequence": "72623859790382856",
+    "media_timestamp": "240",
+    "payload_length": 960,
+    "aad_hex": "474d41310101000000112233445566778899aabbccddeeff000000010100000000000001010203040506070800000000000000f0000003c00000000000000000",
+    "nonce_hex": "000000010102030405060708"
+  },
+  "aes_gcm_provider_smoke": {
+    "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "nonce_hex": "000000000000000000000000",
+    "empty_plaintext_hex": "",
+    "empty_aad_hex": "",
+    "empty_ciphertext_hex": "",
+    "empty_tag_hex": "530f8afbc74536b9a963b4f1c4cb738b",
+    "media_path_challenge": {
+      "aad_hex": "474d41310102000000112233445566778899aabbccddeeff000000010100000000000001000000000000000100000000000000000000000c0000000000000000",
+      "plaintext_hex": "000102030405060708090a0b",
+      "ciphertext_hex": "66b08ccab7604f63c2a92e01",
+      "tag_hex": "d85931d533d9a35a11712f140821b2f4"
+    }
+  },
+  "replay_and_epoch": {
+    "window_size": 1024,
+    "highest_sequence": "2000",
+    "duplicate_sequence": "2000",
+    "lowest_acceptable_sequence": "977",
+    "first_too_old_sequence": "976",
+    "initial_key_epoch": 1,
+    "new_key_epoch": 2,
+    "rekey_grace_ms": 5000,
+    "rekey_started_ns": "1000000000",
+    "previous_epoch_last_grace_ns": "6000000000",
+    "previous_epoch_expired_ns": "6000000001",
+    "previous_epoch_grace_acceptance": "GM_EPOCH_PREVIOUS_GRACE",
+    "expired_previous_epoch_acceptance": "GM_EPOCH_REJECTED",
+    "stale_epoch_path_validation_status": "GM_STATE_CONFLICT",
+    "current_epoch_path_validation_status": "GM_OK"
+  }
+}

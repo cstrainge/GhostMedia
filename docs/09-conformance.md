@@ -71,6 +71,8 @@ An implementation conforms to v1 only when it passes shared cross-platform tests
 
 Tests use deterministic fake clocks, seeded cryptographic test vectors only, and
 separate production CSPRNG tests. Production keys/packets never become fixtures.
+The Phase 2 machine-readable corpus lives at `protocol/vectors/phase2_crypto_vectors.json`
+and is locked by `gm_phase2_vectors_tests`.
 
 ## Reference successful trace
 

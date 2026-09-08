@@ -55,6 +55,17 @@
 #define GM_BRIDGE_FRESHNESS_MS 50u
 #define GM_SEND_CAPACITY_MS 40u
 #define GM_SEND_FRESHNESS_MS 20u
+#define GM_REKEY_GRACE_MS 5000u
+#define GM_SPKI_DIGEST_BYTES 32u
+#define GM_PEER_ID_BASE32_BYTES 52u
+#define GM_TLS_EXPORTER_CONTEXT_BYTES 32u
+#define GM_TLS_EXPORTER_OUTPUT_BYTES 64u
+#define GM_TLS_EXPORTER_LABEL_BYTES 22u
+#define GM_TLS_ALPN_BYTES 12u
+#define GM_TLS_ALPN_MAX_BYTES 32u
+#define GM_TLS_VERSION_1_3 0x0304u
+#define GM_IDENTITY_LEAF_DER_MAX_BYTES 8192u
+#define GM_CRYPTO_KEY_BYTES 32u
 
 #ifdef __cplusplus
 extern "C" {
@@ -124,6 +135,12 @@ typedef enum gm_replay_result {
     GM_REPLAY_TOO_OLD = 3
 } gm_replay_result;
 
+typedef enum gm_epoch_acceptance {
+    GM_EPOCH_REJECTED = 0,
+    GM_EPOCH_CURRENT = 1,
+    GM_EPOCH_PREVIOUS_GRACE = 2
+} gm_epoch_acceptance;
+
 typedef enum gm_control_session_role {
     GM_CONTROL_SESSION_ROLE_APPLE_OUTPUT_SERVER = 1
 } gm_control_session_role;
@@ -153,6 +170,14 @@ typedef enum gm_control_action_kind {
     GM_CONTROL_ACTION_SEND_ERROR_RESULT = 100,
     GM_CONTROL_ACTION_SEND_ERROR_CLOSE = 101
 } gm_control_action_kind;
+
+typedef enum gm_trust_permission {
+    GM_TRUST_PERMISSION_CONNECT = 1u,
+    GM_TRUST_PERMISSION_VIEW_STATUS = 2u,
+    GM_TRUST_PERMISSION_RECEIVE_SYSTEM_AUDIO = 4u,
+    GM_TRUST_PERMISSION_PROVIDE_MICROPHONE = 8u,
+    GM_TRUST_PERMISSION_PROVIDE_CAMERA = 16u
+} gm_trust_permission;
 
 typedef struct gm_bytes {
     const uint8_t *data;
@@ -245,6 +270,16 @@ typedef struct gm_replay_window {
     uint64_t highest_sequence;
     uint64_t bitmap[16];
 } gm_replay_window;
+
+typedef struct gm_epoch_window {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t current_epoch;
+    uint32_t previous_epoch;
+    uint64_t previous_epoch_expires_ns;
+    uint8_t has_previous_epoch;
+    uint8_t reserved[7];
+} gm_epoch_window;
 
 typedef struct gm_control_session_config {
     size_t struct_size;
@@ -357,6 +392,61 @@ typedef struct gm_audio_timing_plan {
     uint32_t send_freshness_frames;
 } gm_audio_timing_plan;
 
+typedef struct gm_crypto_exporter_context_input {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t stream_id;
+    uint32_t direction;
+    uint32_t key_epoch;
+    uint8_t session_id[GM_SESSION_ID_BYTES];
+    uint8_t sender_spki_digest[GM_SPKI_DIGEST_BYTES];
+    uint8_t receiver_spki_digest[GM_SPKI_DIGEST_BYTES];
+} gm_crypto_exporter_context_input;
+
+typedef struct gm_directional_keys {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint8_t media_key[GM_CRYPTO_KEY_BYTES];
+    uint8_t path_key[GM_CRYPTO_KEY_BYTES];
+} gm_directional_keys;
+
+typedef struct gm_trust_record {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint8_t peer_spki_digest[GM_SPKI_DIGEST_BYTES];
+    uint32_t permissions;
+    uint8_t revoked;
+    uint8_t reserved[3];
+} gm_trust_record;
+
+typedef struct gm_tls_peer_policy_observation {
+    size_t struct_size;
+    uint32_t abi_version;
+    uint32_t tls_version;
+    uint32_t peer_certificate_count;
+    uint32_t leaf_der_size;
+    char alpn[GM_TLS_ALPN_MAX_BYTES + 1u];
+    uint8_t leaf_self_signed;
+    uint8_t public_key_ed25519;
+    uint8_t signature_ed25519;
+    uint8_t basic_constraints_ca;
+    uint8_t key_usage_digital_signature;
+    uint8_t eku_client_auth;
+    uint8_t eku_server_auth;
+    uint8_t unknown_critical_extension;
+    uint8_t within_validity;
+    uint8_t local_clock_trusted;
+    uint8_t system_trust_used;
+    uint8_t public_ca_path_used;
+    uint8_t psk_or_ticket_used;
+    uint8_t early_data_used;
+    uint8_t compression_used;
+    uint8_t renegotiation_used;
+    uint8_t trust_record_connect;
+    uint8_t trust_record_revoked;
+    uint8_t reserved[6];
+} gm_tls_peer_policy_observation;
+
 GM_API const char *gm_status_string(gm_status status);
 GM_API gm_status gm_get_version(gm_core_version *out_version);
 GM_API gm_status gm_control_validate_json_text(gm_bytes json_text);
@@ -369,11 +459,22 @@ GM_API gm_status gm_media_decode_header(gm_bytes datagram, gm_media_header *out_
 GM_API gm_status gm_media_build_nonce(uint32_t key_epoch, uint64_t sequence, gm_mut_bytes output);
 GM_API gm_status gm_replay_window_init(gm_replay_window *window);
 GM_API gm_status gm_replay_window_accept(gm_replay_window *window, uint64_t sequence, uint32_t *out_result);
+GM_API gm_status gm_epoch_window_init(gm_epoch_window *window, uint32_t initial_epoch);
+GM_API gm_status gm_epoch_window_begin_rekey(gm_epoch_window *window, uint32_t new_epoch, uint64_t now_ns);
+GM_API gm_status gm_epoch_window_accept(const gm_epoch_window *window, uint32_t key_epoch, uint64_t now_ns, uint32_t *out_acceptance);
 GM_API gm_status gm_control_session_init(const gm_control_session_config *config, gm_control_session *session);
 GM_API gm_status gm_control_session_ingest(gm_control_session *session, gm_bytes json_text, uint64_t now_ns, gm_control_action *out_action);
 GM_API gm_status gm_control_session_mark_path_validated(gm_control_session *session, uint32_t stream_id, uint32_t key_epoch, gm_control_action *out_action);
 GM_API gm_status gm_control_session_get_metrics(const gm_control_session *session, gm_control_metrics *out_metrics);
 GM_API gm_status gm_audio_calculate_timing_plan(const gm_audio_profile *profile, uint32_t playout_target_ms, gm_audio_timing_plan *out_plan);
+GM_API const char *gm_tls_exporter_label(void);
+GM_API gm_status gm_identity_encode_peer_id(gm_bytes spki_digest, gm_mut_bytes output, size_t *written);
+GM_API gm_status gm_trust_record_authorizes(const gm_trust_record *record, uint32_t permission, uint8_t *out_authorized);
+GM_API gm_status gm_tls_peer_policy_validate(const gm_tls_peer_policy_observation *observation);
+GM_API gm_status gm_crypto_build_exporter_context(const gm_crypto_exporter_context_input *input, gm_mut_bytes output, size_t *written);
+GM_API gm_status gm_crypto_split_exporter_output(gm_bytes exporter_output, gm_directional_keys *out_keys);
+GM_API gm_status gm_media_build_aad(const gm_media_header *header, gm_mut_bytes output, size_t *written);
+GM_API gm_status gm_crypto_validate_aead_inputs(gm_bytes key, gm_bytes nonce, gm_bytes aad, gm_bytes payload, gm_bytes tag);
 
 #ifdef __cplusplus
 }

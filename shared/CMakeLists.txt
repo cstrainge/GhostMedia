@@ -2,6 +2,7 @@ include(GNUInstallDirs)
 
 add_library(gm_core STATIC
     core/gm_control.cpp
+    core/gm_crypto.cpp
     core/gm_core.cpp
     core/gm_media.cpp
     core/gm_state.cpp)
@@ -38,6 +39,21 @@ if(GM_BUILD_TESTS)
     endif()
 
     add_test(NAME gm_core_tests COMMAND gm_core_tests)
+
+    add_executable(gm_phase2_vectors_tests
+        tests/gm_phase2_vectors_tests.cpp)
+
+    target_link_libraries(gm_phase2_vectors_tests PRIVATE GhostMedia::Core)
+    target_compile_definitions(gm_phase2_vectors_tests PRIVATE
+        GM_PHASE2_VECTOR_FILE="${CMAKE_SOURCE_DIR}/protocol/vectors/phase2_crypto_vectors.json")
+
+    if(MSVC)
+        target_compile_options(gm_phase2_vectors_tests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(gm_phase2_vectors_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_test(NAME gm_phase2_vectors_tests COMMAND gm_phase2_vectors_tests)
 
     add_executable(gm_core_c_abi_tests
         tests/gm_core_c_abi_tests.c)

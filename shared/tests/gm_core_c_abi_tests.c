@@ -75,6 +75,9 @@ int main(void) {
     header.struct_size = sizeof(header);
     header.abi_version = GM_ABI_VERSION;
     header.kind = GM_MEDIA_KIND_PATH_RESPONSE;
+    for (size_t index = 0u; index < GM_SESSION_ID_BYTES; ++index) {
+        header.session_id[index] = (uint8_t)(index * 0x11u);
+    }
     header.stream_id = 1u;
     header.direction = GM_MEDIA_DIRECTION_APPLE_TO_WIN;
     header.key_epoch = 1u;
@@ -85,6 +88,137 @@ int main(void) {
     check_status(gm_media_encode_header(&header, output, &written), GM_OK, "media header encoder works from C");
     check(written == GM_MEDIA_HEADER_BYTES && encoded[28] == GM_MEDIA_DIRECTION_APPLE_TO_WIN,
           "encoded C ABI media header is available");
+
+        check(strcmp(gm_tls_exporter_label(), "EXPORTER-GhostMedia-v1") == 0,
+            "TLS exporter label is available from C");
+
+        uint8_t windows_spki[GM_SPKI_DIGEST_BYTES];
+        uint8_t apple_spki[GM_SPKI_DIGEST_BYTES];
+        for (size_t index = 0u; index < GM_SPKI_DIGEST_BYTES; ++index) {
+          windows_spki[index] = (uint8_t)index;
+          apple_spki[index] = (uint8_t)(0xf0u - index);
+        }
+        uint8_t peer_id[GM_PEER_ID_BASE32_BYTES + 1u];
+        gm_bytes windows_spki_bytes;
+        windows_spki_bytes.data = windows_spki;
+        windows_spki_bytes.size = sizeof(windows_spki);
+        output.data = peer_id;
+        output.size = sizeof(peer_id);
+        check_status(gm_identity_encode_peer_id(windows_spki_bytes, output, &written), GM_OK,
+                 "peer ID encoder works from C");
+        check(strcmp((const char *)peer_id, "aaaqeayeaudaocajbifqydiob4ibceqtcqkrmfyydenbwha5dypq") == 0,
+            "peer ID vector is available from C");
+
+        gm_trust_record trust;
+        memset(&trust, 0, sizeof(trust));
+        trust.struct_size = sizeof(trust);
+        trust.abi_version = GM_ABI_VERSION;
+        memcpy(trust.peer_spki_digest, windows_spki, sizeof(windows_spki));
+        trust.permissions = GM_TRUST_PERMISSION_CONNECT;
+        uint8_t authorized = 0u;
+        check_status(gm_trust_record_authorizes(&trust, GM_TRUST_PERMISSION_CONNECT, &authorized), GM_OK,
+                 "trust record authorization works from C");
+        check(authorized == 1u, "trust record grants connect from C");
+
+        gm_tls_peer_policy_observation observation;
+        memset(&observation, 0, sizeof(observation));
+        observation.struct_size = sizeof(observation);
+        observation.abi_version = GM_ABI_VERSION;
+        observation.tls_version = GM_TLS_VERSION_1_3;
+        observation.peer_certificate_count = 1u;
+        observation.leaf_der_size = 512u;
+        set_c_string(observation.alpn, sizeof(observation.alpn), "ghostmedia/1");
+        observation.leaf_self_signed = 1u;
+        observation.public_key_ed25519 = 1u;
+        observation.signature_ed25519 = 1u;
+        observation.key_usage_digital_signature = 1u;
+        observation.eku_client_auth = 1u;
+        observation.eku_server_auth = 1u;
+        observation.within_validity = 1u;
+        observation.local_clock_trusted = 1u;
+        observation.trust_record_connect = 1u;
+        check_status(gm_tls_peer_policy_validate(&observation), GM_OK,
+                 "TLS peer policy validates from C");
+
+        gm_crypto_exporter_context_input context_input;
+        uint8_t exporter_context[GM_TLS_EXPORTER_CONTEXT_BYTES];
+        memset(&context_input, 0, sizeof(context_input));
+        memset(exporter_context, 0, sizeof(exporter_context));
+        context_input.struct_size = sizeof(context_input);
+        context_input.abi_version = GM_ABI_VERSION;
+        context_input.stream_id = 1u;
+        context_input.direction = GM_MEDIA_DIRECTION_WIN_TO_APPLE;
+        context_input.key_epoch = 1u;
+        memcpy(context_input.session_id, header.session_id, sizeof(context_input.session_id));
+        memcpy(context_input.sender_spki_digest, windows_spki, sizeof(windows_spki));
+        memcpy(context_input.receiver_spki_digest, apple_spki, sizeof(apple_spki));
+        output.data = exporter_context;
+        output.size = sizeof(exporter_context);
+        check_status(gm_crypto_build_exporter_context(&context_input, output, &written), GM_OK,
+                 "TLS exporter context builds from C");
+        check(exporter_context[0] == 0xea && exporter_context[31] == 0x02,
+            "TLS exporter context vector is available from C");
+
+        uint8_t exporter_output[GM_TLS_EXPORTER_OUTPUT_BYTES];
+        for (size_t index = 0u; index < sizeof(exporter_output); ++index) {
+          exporter_output[index] = (uint8_t)(0xa0u + index);
+        }
+        gm_directional_keys keys;
+        gm_bytes exporter_bytes;
+        memset(&keys, 0, sizeof(keys));
+        keys.struct_size = sizeof(keys);
+        exporter_bytes.data = exporter_output;
+        exporter_bytes.size = sizeof(exporter_output);
+        check_status(gm_crypto_split_exporter_output(exporter_bytes, &keys), GM_OK,
+                 "TLS exporter output split works from C");
+        check(keys.media_key[0] == 0xa0u && keys.path_key[0] == 0xc0u,
+            "directional key split is available from C");
+
+        check_status(gm_media_build_aad(&header, output, &written), GM_BUFFER_TOO_SMALL,
+                 "AAD builder rejects wrong output buffer from C");
+        output.data = encoded;
+        output.size = sizeof(encoded);
+        check_status(gm_media_build_aad(&header, output, &written), GM_OK,
+                 "AAD builder works from C");
+        gm_bytes key_bytes;
+        gm_bytes nonce_bytes;
+        gm_bytes aad_bytes;
+        gm_bytes payload_bytes;
+        gm_bytes tag_bytes;
+        uint8_t key[GM_CRYPTO_KEY_BYTES] = {0};
+        uint8_t nonce[GM_MEDIA_NONCE_BYTES] = {0};
+        uint8_t tag[GM_MEDIA_TAG_BYTES] = {0};
+        key_bytes.data = key;
+        key_bytes.size = sizeof(key);
+        nonce_bytes.data = nonce;
+        nonce_bytes.size = sizeof(nonce);
+        aad_bytes.data = encoded;
+        aad_bytes.size = sizeof(encoded);
+        payload_bytes.data = NULL;
+        payload_bytes.size = 0u;
+        tag_bytes.data = tag;
+        tag_bytes.size = sizeof(tag);
+        check_status(gm_crypto_validate_aead_inputs(key_bytes, nonce_bytes, aad_bytes, payload_bytes, tag_bytes), GM_OK,
+                 "AEAD input boundary validates from C");
+
+        gm_epoch_window epoch_window;
+        uint32_t epoch_acceptance = GM_EPOCH_REJECTED;
+        memset(&epoch_window, 0, sizeof(epoch_window));
+        epoch_window.struct_size = sizeof(epoch_window);
+        check_status(gm_epoch_window_init(&epoch_window, 1u), GM_OK,
+                 "epoch window initializes from C");
+        check_status(gm_epoch_window_begin_rekey(&epoch_window, 2u, 1000u), GM_OK,
+                 "epoch window begins rekey from C");
+        check_status(gm_epoch_window_accept(&epoch_window, 1u, 1000u + ((uint64_t)GM_REKEY_GRACE_MS * 1000u * 1000u),
+                                            &epoch_acceptance),
+                 GM_OK, "epoch window accepts previous epoch at grace boundary from C");
+        check(epoch_acceptance == GM_EPOCH_PREVIOUS_GRACE,
+            "epoch window reports previous-epoch grace from C");
+        check_status(gm_epoch_window_accept(&epoch_window, 1u, 1000u + ((uint64_t)GM_REKEY_GRACE_MS * 1000u * 1000u) + 1u,
+                                            &epoch_acceptance),
+                 GM_OK, "epoch window rejects expired previous epoch from C");
+        check(epoch_acceptance == GM_EPOCH_REJECTED,
+            "epoch window reports expired previous epoch from C");
 
         gm_control_session_config config;
         gm_control_session session;
