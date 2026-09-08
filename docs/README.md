@@ -32,6 +32,8 @@ Microphone input and webcam input are future extensions, not version 1 features.
    tests, byte examples, and cross-platform verification requirements.
 10. [Cross-platform implementation plan](10-implementation-plan.md): phased
     Windows/macOS delivery plan, shared C ABI core, synchronization gates, and CI.
+11. [Phase checklist](11-phase-checklist.md): trackable phase-by-phase component
+   checklist and current integration checkpoint.
 
 ## Normative language and precedence
 
