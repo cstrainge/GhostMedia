@@ -22,7 +22,7 @@ and fixture ownership explicit.
 - [x] Root CMake project.
 - [x] Initial shared C ABI library scaffold.
 - [x] Windows service scaffold.
-- [ ] Swift package or Xcode wrapper for the Apple output-server app.
+- [x] Swift package or Xcode wrapper for the Apple output-server app.
 - [ ] Windows WDK driver stub and package skeleton.
 - [ ] Fixture tooling and protocol change log.
 - [ ] Header-size/schema linting.
@@ -49,15 +49,15 @@ and fixture ownership explicit.
 - [x] Apple output-server handoff directory and integration notes.
 - [x] Clang module map for Swift import of the shared C ABI.
 - [ ] Apple toolchains pinned.
-- [ ] Empty Apple CLI receiver imports and calls the C module.
+- [x] Apple CLI receiver imports and calls the C module.
 - [ ] Apple TLS feasibility spike with Keychain identity storage and exporter output.
 
 ### Exit checks
 
 - [x] Windows builds the core and service scaffold.
 - [x] C ABI smoke test builds and passes on Windows.
-- [ ] macOS builds the core stub.
-- [ ] Swift calls a version function.
+- [x] macOS builds the core stub.
+- [x] Swift calls a version function.
 - [ ] Fixture reader round-trips one known fixture on both platforms.
 - [ ] Both TLS spikes complete the exact v1 handshake and match exporter output.
 
@@ -99,8 +99,8 @@ Goal: implement pure protocol behavior with no socket or device dependency.
 
 ### Apple output server
 
-- [ ] Swift CLI harness uses the shared C ABI without duplicating JSON semantics.
-- [ ] Apple harness produces byte-identical frames and traces against Windows fixtures.
+- [x] Swift CLI harness uses the shared C ABI without duplicating JSON semantics.
+- [x] Apple harness produces byte-identical frames and traces against Windows fixtures.
 
 ### Exit checks
 
@@ -191,7 +191,7 @@ Core Audio output.
 
 - [x] Pre-TLS framed TCP probe with pinned `server_id` support.
 - [x] Local dry-run and loopback smoke coverage for the probe.
-- [ ] Manual LAN addressing flow documented as authorized test mode.
+- [x] Manual LAN addressing flow documented as authorized test mode.
 - [ ] DNS-SD browse limited to an explicitly enabled private interface.
 - [ ] TLS-backed control connection.
 - [ ] UDP path validation sender.
@@ -227,7 +227,7 @@ Goal: replace the discard sink with reliable audible playback.
 
 ### Components
 
-- [ ] Swift app shell.
+- [x] Swift app shell.
 - [ ] `AppleAudioOutput` adapter.
 - [ ] Output AudioUnit.
 - [ ] Preallocated PCM ring.
