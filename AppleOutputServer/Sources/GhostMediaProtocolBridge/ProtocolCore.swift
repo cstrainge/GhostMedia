@@ -462,7 +462,7 @@ public enum ProtocolCore {
         return output
     }
 
-    fileprivate static func requireOK(_ status: gm_status, operation: String) throws {
+    static func requireOK(_ status: gm_status, operation: String) throws {
         guard status == GM_OK else {
             throw ProtocolCoreError.callFailed(
                 operation: operation,
@@ -471,7 +471,7 @@ public enum ProtocolCore {
         }
     }
 
-    private static func rawMediaHeader(from header: MediaHeader) throws -> gm_media_header {
+    static func rawMediaHeader(from header: MediaHeader) throws -> gm_media_header {
         guard header.sessionID.count == Int(GM_SESSION_ID_BYTES) else {
             throw ProtocolCoreError.invalidSessionIDLength(
                 expected: Int(GM_SESSION_ID_BYTES),
@@ -637,7 +637,7 @@ public enum ProtocolCore {
         }
     }
 
-    private static func rawMediaDirection(from direction: MediaDirection) -> UInt32 {
+    static func rawMediaDirection(from direction: MediaDirection) -> UInt32 {
         switch direction {
         case .windowsToApple:
             return UInt32(GM_MEDIA_DIRECTION_WIN_TO_APPLE.rawValue)

@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "GhostMediaCore", targets: ["GhostMediaCore"]),
         .library(name: "GhostMediaProtocolBridge", targets: ["GhostMediaProtocolBridge"]),
         .library(name: "GhostMediaAppleCore", targets: ["GhostMediaAppleCore"]),
+        .library(name: "GhostMediaAppleSecurity", targets: ["GhostMediaAppleSecurity"]),
         .library(name: "GhostMediaAppleUI", targets: ["GhostMediaAppleUI"]),
         .executable(name: "GhostMediaAppleHarness", targets: ["GhostMediaAppleHarness"]),
         .executable(name: "GhostMediaMac", targets: ["GhostMediaMac"]),
@@ -35,13 +36,18 @@ let package = Package(
             path: "AppleOutputServer/Sources/GhostMediaAppleCore"
         ),
         .target(
+            name: "GhostMediaAppleSecurity",
+            dependencies: ["GhostMediaProtocolBridge"],
+            path: "AppleOutputServer/Sources/GhostMediaAppleSecurity"
+        ),
+        .target(
             name: "GhostMediaAppleUI",
             dependencies: ["GhostMediaAppleCore", "GhostMediaProtocolBridge"],
             path: "AppleOutputServer/Sources/GhostMediaAppleUI"
         ),
         .executableTarget(
             name: "GhostMediaAppleHarness",
-            dependencies: ["GhostMediaProtocolBridge"],
+            dependencies: ["GhostMediaProtocolBridge", "GhostMediaAppleSecurity"],
             path: "AppleOutputServer/Sources/GhostMediaAppleHarness"
         ),
         .executableTarget(
@@ -58,6 +64,11 @@ let package = Package(
             name: "GhostMediaProtocolBridgeTests",
             dependencies: ["GhostMediaProtocolBridge"],
             path: "AppleOutputServer/Tests/GhostMediaProtocolBridgeTests"
+        ),
+        .testTarget(
+            name: "GhostMediaAppleSecurityTests",
+            dependencies: ["GhostMediaAppleSecurity", "GhostMediaProtocolBridge"],
+            path: "AppleOutputServer/Tests/GhostMediaAppleSecurityTests"
         ),
     ],
     swiftLanguageModes: [.v6],

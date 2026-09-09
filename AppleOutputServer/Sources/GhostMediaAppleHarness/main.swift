@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import GhostMediaAppleSecurity
 import GhostMediaProtocolBridge
 
 private let testServerID = "01234567-89ab-cdef-0123-456789abcdef"
@@ -31,6 +32,7 @@ private enum HarnessError: Error, CustomStringConvertible {
 private struct HarnessOptions {
     var listenPort: UInt16?
     var allowPlaintext = false
+    var runPhase2Vectors = false
     var showHelp = false
 
     static func parse(_ arguments: [String]) throws -> HarnessOptions {
@@ -42,6 +44,8 @@ private struct HarnessOptions {
                 options.showHelp = true
             case "--allow-plaintext":
                 options.allowPlaintext = true
+            case "--phase2-vectors":
+                options.runPhase2Vectors = true
             case "--listen":
                 index += 1
                 guard index < arguments.count,
@@ -60,6 +64,9 @@ private struct HarnessOptions {
             throw HarnessError.usage(
                 "--listen requires --allow-plaintext for this pre-TLS interoperability test"
             )
+        }
+        if options.listenPort != nil && options.runPhase2Vectors {
+            throw HarnessError.usage("--listen and --phase2-vectors cannot be combined")
         }
         return options
     }
@@ -88,6 +95,8 @@ enum GhostMediaAppleHarness {
                 printUsage()
             } else if let port = options.listenPort {
                 try runListener(port: port)
+            } else if options.runPhase2Vectors {
+                try runPhase2Vectors()
             } else {
                 try runDeterministicSmoke()
             }
@@ -105,6 +114,8 @@ enum GhostMediaAppleHarness {
                   Run the deterministic local Phase 1 smoke.
               --listen <port> --allow-plaintext
                   Accept one Windows control probe and exit after stream.open.
+              --phase2-vectors
+                  Run deterministic identity, exporter, and AES-GCM vector checks.
 
             The listener is pre-TLS and only for the first interoperability test.
             Stable test server ID: \(testServerID)
@@ -364,5 +375,67 @@ enum GhostMediaAppleHarness {
         print("framing: \(try ProtocolCore.inspectControlFrame(framedPing))")
         print("path directions: challenge=\(encodedChallenge[28]) response=\(encodedResponse[28])")
         print("replay: first=\(firstReplayDecision) duplicate=\(duplicateReplayDecision)")
+    }
+
+    private static func runPhase2Vectors() throws {
+        let windowsDigest = data(
+            hex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        )
+        let appleDigest = data(
+            hex: "f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1"
+        )
+        let sessionID = data(hex: testSessionID)
+        let context = try ProtocolCore.exporterContext(
+            ExporterContextInput(
+                sessionID: sessionID,
+                streamID: 1,
+                direction: .windowsToApple,
+                keyEpoch: 1,
+                senderSPKIDigest: windowsDigest,
+                receiverSPKIDigest: appleDigest
+            )
+        )
+        try require(
+            context == data(
+                hex: "eae82ef20c131d0f5b03bb069b25d92b1d594ed041c02a8f474367c682087a02"
+            ),
+            "Windows-to-Apple exporter context did not match the Phase 2 vector"
+        )
+
+        let zeroKey = Data(repeating: 0, count: 32)
+        let zeroNonce = Data(repeating: 0, count: 12)
+        let sealed = try AppleAESGCM.seal(
+            Data(),
+            key: zeroKey,
+            nonce: zeroNonce,
+            authenticating: Data()
+        )
+        try require(
+            sealed.ciphertext.isEmpty &&
+                sealed.tag == data(hex: "530f8afbc74536b9a963b4f1c4cb738b"),
+            "AES-256-GCM known-answer vector did not match"
+        )
+
+        let peerID = try ProtocolCore.peerID(forSPKIDigest: appleDigest)
+        try require(
+            peerID == "6dx653pm5pvot2hh43s6jy7c4hqn7xw53tn5vwoy27lnlvgt2liq",
+            "Apple peer ID did not match the Phase 2 vector"
+        )
+        print("GhostMedia Apple Phase 2 vector harness")
+        print("exporter label: \(ProtocolCore.tlsExporterLabel)")
+        print("peer ID, exporter context, and AES-256-GCM vectors: passed")
+    }
+
+    private static func data(hex: String) -> Data {
+        precondition(hex.count.isMultiple(of: 2))
+        var output = Data()
+        output.reserveCapacity(hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            output.append(UInt8(hex[index..<next], radix: 16)!)
+            index = next
+        }
+        return output
     }
 }

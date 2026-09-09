@@ -149,18 +149,25 @@ Goal: prove authenticated transport bytes before real networking.
 
 ### Apple output server
 
-- [ ] Persistent CSPRNG server ID.
-- [ ] Output-server identity key generation/storage.
-- [ ] Self-signed Ed25519 leaf certificate.
-- [ ] Local trust records and revocation handling.
+- [x] Persistent CSPRNG server ID.
+- [ ] Output-server identity key generation/storage. The current CryptoKit
+  prototype persists exportable raw key material and therefore does not meet the
+  non-exportable platform-keystore requirement.
+- [x] Self-signed Ed25519 leaf certificate.
+- [x] Local trust records and revocation handling.
+- [x] AES-256-GCM media/path provider adapter backed by CryptoKit.
 - [ ] TLS listener enforcing leaf-only mutual authentication.
 - [ ] TLS exporter output supplied to the shared core.
+- [ ] Ed25519-capable native TLS identity provider selected. The current Apple
+  Security API does not expose a supported conversion from a CryptoKit Ed25519
+  private key to the `SecIdentity` required by Network.framework.
 
 ### Exit checks
 
 - [ ] Bad leaf, pin, revocation, and wrong peer are rejected.
 - [ ] Windows and Apple TLS exporter bytes match vectors.
 - [x] Altered AAD, ciphertext, or tag fails in the Windows AES-GCM adapter test.
+- [x] Altered AAD, ciphertext, or tag fails in the Apple AES-GCM adapter test.
 - [x] Nonce construction, replay edges, and rekey grace are covered by shared tests.
 - [ ] No media key is available before an authorized stream.
 
@@ -443,6 +450,6 @@ Goal: produce signed, observable, maintainable platform releases.
 - [x] Probe reached `stream.open` with server ID
   `01234567-89ab-cdef-0123-456789abcdef`.
 - [ ] TLS/exporter adapter replaces the plaintext probe path.
-- [ ] AES-GCM media key/vector lock completed before UDP media is sent.
+- [x] AES-GCM media key/vector lock completed before UDP media is sent.
 - [ ] Secure UDP path challenge/response completed.
 - [ ] Synthetic PCM packets sent and received over protected UDP.

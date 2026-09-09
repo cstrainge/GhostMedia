@@ -21,14 +21,16 @@ GhostMediaAppleUI (shared SwiftUI composition)
         |                       |
         v                       v
 GhostMediaAppleCore     GhostMediaProtocolBridge (safe Swift values)
-                                |
-                                v
-                        GhostMediaCore (shared/core + gm_core.h)
+                                |               ^
+                                v               |
+                        GhostMediaCore   GhostMediaAppleSecurity
+                                        (identity, trust, AES-GCM,
+                                         TLS exporter boundary)
 
-GhostMediaAppleHarness (deterministic Phase 1 CLI)
-        |
-        v
-GhostMediaProtocolBridge
+GhostMediaAppleHarness (deterministic Phase 1/2 CLI)
+        |                       |
+        v                       v
+GhostMediaProtocolBridge   GhostMediaAppleSecurity
 ```
 
 `GhostMediaCore` compiles the same C++ sources consumed by the Windows CMake
@@ -36,6 +38,13 @@ build. Its public surface is the C ABI in `shared/include/ghostmedia/gm_core.h`.
 
 `GhostMediaProtocolBridge` owns Swift lifetime, buffer, string, and error mapping
 around that C ABI. Other Swift targets should not call the raw C API directly.
+
+`GhostMediaAppleSecurity` owns the persistent server ID and trust records,
+provisional exportable CryptoKit identity storage, Ed25519 certificate
+construction, CryptoKit AES-256-GCM, and the native TLS exporter adapter. The
+current SDK can export TLS keying material but cannot create the non-exportable
+Ed25519 `SecIdentity` required for a live Network.framework listener, so the
+conformant identity and transport integration remain intentionally unimplemented.
 
 `GhostMediaAppleCore` contains types describing the Apple host, application state,
 and output-service boundary. It must not parse control JSON, construct media
@@ -49,17 +58,17 @@ audio units, or protocol state.
 and injects them into shared layers. The current target contains the app shell and
 shared-core version probe.
 
-`GhostMediaAppleHarness` is the Phase 1 integration executable. It feeds
+`GhostMediaAppleHarness` is the Phase 1/2 integration executable. It feeds
 deterministic control and media fixtures through `GhostMediaProtocolBridge` and
-prints the resulting typed values. Its explicit `--listen ... --allow-plaintext`
-mode provides the one-shot TCP endpoint required by the first Windows probe. It
-has no TLS, DNS-SD, Keychain, UDP media, or audio dependencies.
+prints the resulting typed values. Its `--phase2-vectors` mode checks identity,
+exporter-context, and AES-GCM vectors. Its explicit
+`--listen ... --allow-plaintext` mode provides the one-shot TCP endpoint required
+by the first Windows probe. It has no live TLS, DNS-SD, UDP media, or audio path.
 
 ## Planned adapter targets
 
 | Target | Responsibility | Expected portability |
 | --- | --- | --- |
-| `GhostMediaIdentity` | Ed25519 identity, certificate, server ID, trust records | Shared API; platform Keychain implementation |
 | `GhostMediaTransport` | DNS-SD advertisement, TCP/TLS listener, UDP, interface binding | Shared API with platform policy adapters |
 | `GhostMediaAudio` | Jitter-to-output ring and audio device integration | Shared primitives; separate macOS/iOS output adapters |
 | `GhostMediaDiagnostics` | Typed local metrics and privacy-safe support data | macOS and iOS |
