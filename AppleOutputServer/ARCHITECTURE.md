@@ -65,7 +65,9 @@ user intent to an injected service. They do not own sockets, Keychain records,
 audio units, or protocol state.
 
 `GhostMediaMac` is the macOS composition root. It creates macOS-specific adapters
-and injects them into shared layers. The current target contains the app shell and
+and injects them into shared layers. `GhostMediaAppleCore` includes the DNS-SD
+advertisement adapter for the authenticated listener; the host starts and stops it
+with listener lifecycle. The current target otherwise contains the app shell and
 shared-core version probe.
 
 `GhostMediaAppleHarness` is the Phase 1/2 integration executable and Phase 3
