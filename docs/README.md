@@ -35,6 +35,9 @@ Microphone input and webcam input are future extensions, not version 1 features.
 11. [Phase checklist](11-phase-checklist.md): trackable phase-by-phase component
    checklist and current integration checkpoint.
 
+The repository-wide convention for inspectable final build artifacts is defined
+in the [repository and build strategy](10-implementation-plan.md#repository-and-build-strategy).
+
 ## Normative language and precedence
 
 MUST/MUST NOT identify interoperability or safety requirements. SHOULD identifies

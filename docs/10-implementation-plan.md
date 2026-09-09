@@ -375,6 +375,37 @@ platform-built core and importing `gm_core.h` through a module map. Pin dependen
 generate an SBOM, and keep crypto, JSON validation, and C/C++ runtime dependencies
 small. Platform TLS, keys, DNS-SD, sockets, and audio frameworks remain adapters.
 
+### Final build artifacts
+
+Every build or packaging workflow that produces an inspectable final artifact
+MUST copy it into the repository-root `dist/` directory before reporting success.
+This applies to the signed macOS application, Windows userspace service/helpers,
+Windows driver and driver package, and every test executable used for manual or
+cross-host validation. Intermediate compiler output remains in platform build
+directories; `dist/` is the single, predictable handoff location for the artifacts
+that a developer, test operator, or release reviewer needs to inspect or run.
+
+Keep `dist/` flat so every final artifact is visible in one place. Filenames MUST
+include the platform and architecture where that avoids ambiguity:
+
+```text
+dist/
+  GhostMedia-macos-arm64.app
+  GhostMediaWinService-windows-x64.exe
+  GhostMediaWinDriver-windows-x64.sys
+  GhostMediaWinDriver-windows-x64.zip
+  GhostMediaAppleHarness-macos-arm64
+  GhostMediaWinControlProbe-windows-x64.exe
+  manifest-macos-arm64.json
+  manifest-windows-x64.json
+```
+
+Each packaging workflow SHOULD place a manifest alongside its artifacts recording
+the source revision, build configuration, platform/architecture, build time, and
+checksums. A workflow MUST stage into a temporary directory and publish its own
+artifacts into `dist/` only after the build and associated tests pass; it MUST NOT
+delete or overwrite artifacts belonging to another platform or configuration.
+
 | CI lane | Environment | Required checks |
 | --- | --- | --- |
 | Core fast | Windows, macOS, optional Linux | Build, unit, ABI, vectors, state traces |
