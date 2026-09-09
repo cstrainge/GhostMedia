@@ -153,8 +153,8 @@ void print_usage(std::ostream &output) {
            << "  --playout-target-ms <15..120>     stream.open playout target.\n"
            << "  --client-name <text>              session.hello client name.\n\n"
            << "  --expect-server-id <uuid>         reject mismatched Apple server_id.\n\n"
-           << "This probe is pre-TLS and pre-AEAD. It is for first interop tests only,\n"
-           << "not a conformant GhostMedia v1 transport.\n";
+           << "--allow-plaintext is only for the first control-framing interop test.\n"
+           << "--phase3-test uses pinned mutual TLS and protected UDP test fixtures.\n";
 }
 
 bool parse_u16(std::string_view text, uint16_t minimum, uint16_t maximum, uint16_t *out_value) {
