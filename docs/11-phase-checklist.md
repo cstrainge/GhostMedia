@@ -42,7 +42,7 @@ and fixture ownership explicit.
 - [x] Empty service target builds.
 - [ ] Windows SDK/WDK requirements pinned in build docs or presets.
 - [ ] Empty WDK driver project builds without installing a driver.
-- [ ] TLS feasibility spike for Ed25519 leaf-only mutual TLS 1.3 and exporter output.
+- [x] TLS feasibility spike for Ed25519 leaf-only mutual TLS 1.3 and exporter output.
 
 ### Apple output server
 
@@ -50,7 +50,7 @@ and fixture ownership explicit.
 - [x] Clang module map for Swift import of the shared C ABI.
 - [ ] Apple toolchains pinned.
 - [x] Apple CLI receiver imports and calls the C module.
-- [ ] Apple TLS feasibility spike with Keychain identity storage and exporter output.
+- [x] Apple TLS feasibility spike with Keychain identity storage and exporter output.
 
 ### Exit checks
 
@@ -59,7 +59,7 @@ and fixture ownership explicit.
 - [x] macOS builds the core stub.
 - [x] Swift calls a version function.
 - [ ] Fixture reader round-trips one known fixture on both platforms.
-- [ ] Both TLS spikes complete the exact v1 handshake and match exporter output.
+- [x] Both TLS spikes complete the exact v1 handshake and agree on exporter output.
 
 ## Phase 1 - deterministic protocol core
 
@@ -121,7 +121,12 @@ Goal: prove authenticated transport bytes before real networking.
 - [x] TLS exporter context and adapter boundary.
 - [x] Identity and trust adapter interfaces.
 - [x] Machine-readable vector corpus.
-- [x] Windows AES-256-GCM provider adapter.
+- [x] Shared OpenSSL 3 identity, TLS, exporter, and AES-256-GCM runtime.
+- [x] Shared TCP socket boundary used by Windows and Apple harnesses.
+- [x] Real mutual-TLS 1.3 sessions run over runtime-owned TCP sockets.
+- [x] TLS handshakes enforce the five-second deadline, 32 KiB pre-authentication
+  input limit, leaf-only profile, exact ALPN, and constant-time SPKI pinning.
+- [x] Runtime TCP connect and accept operations enforce bounded deadlines.
 - [x] Epoch lifecycle tests and vectors.
 - [x] Replay/rekey grace tests and vectors.
 
@@ -139,33 +144,36 @@ Goal: prove authenticated transport bytes before real networking.
 
 ### Windows
 
-- [ ] Client identity key generation/storage.
+- [ ] Client identity protected persistence.
 - [x] Self-signed Ed25519 leaf certificate.
 - [ ] Local trust records and revocation handling.
-- [ ] TLS adapter enforcing leaf-only mutual authentication.
-- [ ] TLS exporter output supplied to the shared core.
+- [x] Shared TLS adapter enforcing TLS 1.3, leaf-only mutual authentication,
+  pinned SPKI, and `ghostmedia/1`.
+- [x] Shared TLS exporter output passes through the shared key-splitting boundary.
 - [x] AES-256-GCM media/path provider adapter backed by OpenSSL 3.
-- [x] OpenSSL 3 selected for Ed25519/X.509 identity primitives.
+- [x] OpenSSL 3 selected for shared Ed25519/X.509 and TLS primitives.
 
 ### Apple output server
 
 - [x] Persistent CSPRNG server ID.
-- [ ] Output-server identity key generation/storage. The current CryptoKit
-  prototype persists exportable raw key material and therefore does not meet the
-  non-exportable platform-keystore requirement.
+- [x] Output-server Ed25519 identity generation and device-local,
+  non-synchronizing Keychain persistence.
+- [x] Legacy raw Ed25519 Keychain identities migrate to PKCS#8 without changing
+  the SPKI or peer ID.
+- [x] Expired current-format and legacy certificates renew with the existing key
+  without changing the SPKI or peer ID.
 - [x] Self-signed Ed25519 leaf certificate.
 - [x] Local trust records and revocation handling.
-- [x] AES-256-GCM media/path provider adapter backed by CryptoKit.
+- [x] AES-256-GCM media/path provider supplied by the shared OpenSSL runtime.
 - [ ] TLS listener enforcing leaf-only mutual authentication.
-- [ ] TLS exporter output supplied to the shared core.
-- [ ] Ed25519-capable native TLS identity provider selected. The current Apple
-  Security API does not expose a supported conversion from a CryptoKit Ed25519
-  private key to the `SecIdentity` required by Network.framework.
+- [x] Shared TLS exporter output supplied to the shared core.
+- [x] OpenSSL XCFramework selected for macOS and iOS Ed25519/TLS support.
 
 ### Exit checks
 
-- [ ] Bad leaf, pin, revocation, and wrong peer are rejected.
-- [ ] Windows and Apple TLS exporter bytes match vectors.
+- [x] Bad leaf, pin, revocation, and wrong peer are rejected.
+- [x] Windows and Apple use the same runtime exporter implementation, and both
+  TLS peers produce identical exporter bytes.
 - [x] Altered AAD, ciphertext, or tag fails in the Windows AES-GCM adapter test.
 - [x] Altered AAD, ciphertext, or tag fails in the Apple AES-GCM adapter test.
 - [x] Nonce construction, replay edges, and rekey grace are covered by shared tests.
@@ -182,7 +190,7 @@ Core Audio output.
 - [ ] Windows console control client and media sender.
 - [ ] Apple CLI output server and media receiver.
 - [ ] mDNS browse and advertisement adapters.
-- [ ] TCP/TLS control transport adapters.
+- [x] Shared TCP/TLS transport adapter with encrypted loopback I/O.
 - [ ] UDP media transport adapters.
 - [ ] Synthetic 48 kHz stereo PCM source.
 - [ ] Deterministic discard sink.
@@ -221,7 +229,7 @@ Core Audio output.
 ### Exit checks
 
 - [x] Pre-TLS Windows-to-Mac control/framing probe reaches `stream.open`.
-- [ ] Loopback secure transport trace.
+- [x] Loopback secure transport trace.
 - [ ] Two-host IPv4 trace.
 - [ ] IPv6 link-local trace with scope handling.
 - [ ] Wi-Fi loss, reorder, duplicate, and flood tests.

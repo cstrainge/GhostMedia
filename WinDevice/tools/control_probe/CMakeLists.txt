@@ -4,7 +4,7 @@ add_executable(GhostMediaWinControlProbe
 target_link_libraries(GhostMediaWinControlProbe
     PRIVATE
         GhostMedia::Core
-        ws2_32)
+        GhostMedia::Runtime)
 
 target_compile_features(GhostMediaWinControlProbe PRIVATE cxx_std_20)
 

@@ -14,12 +14,11 @@ starter for the future service host. The WaveRT driver project is intentionally
 not scaffolded yet; the protocol core and userspace vertical slice should build
 and pass tests before WDK driver work begins.
 
-`GhostMediaWinSecurity` under `security/` is the Windows-side Phase 2 provider
-adapter. It uses OpenSSL 3 for AES-256-GCM and Ed25519/X.509 primitives while
-relying on the shared core for key, nonce, AAD, payload, tag, replay, epoch, TLS
-policy, and exporter-context validation. The generated in-memory identity uses the
-required self-signed Ed25519 leaf profile; protected persistent key storage and the
-live mutual-TLS transport adapter remain separate work.
+`GhostMediaRuntime` under `runtime/` is the cross-platform userspace provider used
+by Windows and Apple. It owns OpenSSL 3 AES-256-GCM, Ed25519/X.509, pinned mutual
+TLS 1.3, exporters, and portable socket I/O while relying on `gm_core` for wire
+layout, replay, epoch, policy, and exporter-context validation. Windows protected
+identity/trust persistence and live TLS client orchestration remain separate work.
 
 The Windows preset uses vcpkg manifest mode through `VCPKG_ROOT`. Visual Studio's
 bundled vcpkg is sufficient:
@@ -33,7 +32,7 @@ Phase 2 local smoke:
 
 ```powershell
 $ctest = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe"
-& $ctest --preset windows-msvc -R '^(gm_phase2_vectors_tests|win_crypto_provider_tests)$' --output-on-failure
+& $ctest --preset windows-msvc -R '^(gm_phase2_vectors_tests|runtime_security_tests)$' --output-on-failure
 ```
 
 ## First Mac interop probe
@@ -43,7 +42,8 @@ command-line harness for first Mac communication tests. It uses `gm_core` to bui
 and validate control frames, then drives the initial `session.hello`,
 `transport.bind`, and `stream.open` sequence. It also validates the expected
 Windows-to-Apple `PATH_CHALLENGE` and Apple-to-Windows `PATH_RESPONSE` header
-directions, but it does not send encrypted UDP media yet.
+directions. Its TCP I/O comes from `GhostMediaRuntime`, but it does not send
+encrypted UDP media yet.
 
 Local dry-run:
 

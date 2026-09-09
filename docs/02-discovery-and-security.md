@@ -74,8 +74,15 @@ routed-interface mode. New DNS data never inherits trust or authorization.
 
 ## 4. Identity, trust records, and pairing
 
-Each installation creates one non-exportable long-term Ed25519 private key in the
-platform key store and a self-signed X.509 leaf certificate. V1 MUST NOT use RSA,
+Each installation creates one long-term Ed25519 private key using an approved CSPRNG
+and a self-signed X.509 leaf certificate. Its PKCS#8 encoding MUST be persisted only
+in OS-protected, device-local secret storage, configured as non-synchronizing and
+non-migratory where the platform supports those controls. Implementations MUST NOT
+write the key to ordinary files, expose an identity-export feature, include it in
+diagnostics or backups, or transmit it over the network. The process may load the
+key into protected application memory because current general-purpose Windows and
+Apple platform key APIs cannot provide the required Ed25519 TLS identity directly.
+V1 MUST NOT use RSA,
 SHA-1, MD5, or algorithm fallback. The leaf must be X.509v3 with a critical
 `basicConstraints: CA=FALSE`, critical `keyUsage: digitalSignature`, EKU containing
 both `clientAuth` and `serverAuth`, a random serial of at least 64 unpredictable
@@ -188,7 +195,10 @@ is presented. For every peer certificate, validate in this order:
    MUST NOT grant or widen authorization.
 
 A TLS library unable to enforce this leaf-only validation, including rejecting system
-roots, MUST NOT be used. Renewing a leaf certificate with the exact same validated
+roots, MUST NOT be used. The shared userspace runtime owns the OpenSSL TLS engine,
+certificate-profile enforcement, pinned-peer verification, ALPN, and exporter calls;
+platform hosts supply protected identity/trust persistence and lifecycle policy.
+Renewing a leaf certificate with the exact same validated
 SPKI remains trusted if it still satisfies the v1 leaf profile and validity rules.
 Replacing the SPKI is an identity rotation and requires explicit bilateral local
 pairing. Certificate renewal MUST NOT silently widen permissions or change the

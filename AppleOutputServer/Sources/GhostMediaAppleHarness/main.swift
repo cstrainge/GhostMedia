@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import GhostMediaAppleSecurity
 import GhostMediaProtocolBridge
+import GhostMediaRuntime
 
 private let testServerID = "01234567-89ab-cdef-0123-456789abcdef"
 private let testSessionID = "00112233445566778899aabbccddeeff"
@@ -11,7 +12,7 @@ private let socketTimeoutSeconds = 10
 
 private enum HarnessError: Error, CustomStringConvertible {
     case usage(String)
-    case systemCall(operation: String, code: Int32)
+    case runtime(operation: String, status: String, detail: String)
     case connectionClosed
     case unexpectedMessage(String)
 
@@ -19,8 +20,8 @@ private enum HarnessError: Error, CustomStringConvertible {
         switch self {
         case .usage(let message):
             return message
-        case .systemCall(let operation, let code):
-            return "\(operation) failed: \(String(cString: strerror(code)))"
+        case .runtime(let operation, let status, let detail):
+            return "\(operation) failed: \(status): \(detail)"
         case .connectionClosed:
             return "Windows probe closed the connection before the handshake completed"
         case .unexpectedMessage(let message):
@@ -73,16 +74,14 @@ private struct HarnessOptions {
 }
 
 private final class SocketHandle {
-    private(set) var descriptor: Int32
+    let pointer: OpaquePointer
 
-    init(_ descriptor: Int32) {
-        self.descriptor = descriptor
+    init(_ pointer: OpaquePointer) {
+        self.pointer = pointer
     }
 
     deinit {
-        if descriptor >= 0 {
-            Darwin.close(descriptor)
-        }
+        gm_runtime_tcp_socket_destroy(pointer)
     }
 }
 
@@ -132,16 +131,23 @@ enum GhostMediaAppleHarness {
         print("server_id: \(testServerID)")
         fflush(stdout)
 
-        let acceptedDescriptor = Darwin.accept(listener.descriptor, nil, nil)
-        guard acceptedDescriptor >= 0 else {
-            throw HarnessError.systemCall(operation: "accept", code: errno)
+        var acceptedPointer: OpaquePointer?
+        try requireRuntimeOK(
+            gm_runtime_tcp_accept(
+                listener.pointer,
+                UInt32(socketTimeoutSeconds * 1_000),
+                &acceptedPointer
+            ),
+            operation: "accept"
+        )
+        guard let acceptedPointer else {
+            throw HarnessError.unexpectedMessage("accept returned no connection")
         }
-        let connection = SocketHandle(acceptedDescriptor)
-        try configureTimeouts(connection.descriptor)
+        let connection = SocketHandle(acceptedPointer)
         print("Windows probe connected")
 
         var decoder = ControlFrameDecoder()
-        let hello = try receiveMessage(connection.descriptor, decoder: &decoder)
+        let hello = try receiveMessage(connection.pointer, decoder: &decoder)
         try require(
             hello.kind == .requestSessionHello &&
                 hello.id == 1 &&
@@ -154,10 +160,10 @@ enum GhostMediaAppleHarness {
             """
             {"v":1,"id":1,"type":"result","result":{"version":1,"role":"apple-output-server","server_id":"\(testServerID)","session_id":"\(testSessionID)","boot_id":"\(testBootID)","udp_port":\(testAppleUDPPort),"capabilities":{"audio_send":false,"audio_receive":true,"microphone":false,"camera":false,"audio_profiles":[{"codec":"pcm_s16le","sample_rate_hz":48000,"channels":2,"channel_layout":"stereo","frames_per_packet":240}]},"limits":{"max_audio_subscribers":1,"playout_target_ms_min":15,"playout_target_ms_max":120}}}
             """,
-            to: connection.descriptor
+            to: connection.pointer
         )
 
-        let bind = try receiveMessage(connection.descriptor, decoder: &decoder)
+        let bind = try receiveMessage(connection.pointer, decoder: &decoder)
         try require(
             bind.kind == .requestTransportBind &&
                 bind.id == 2 &&
@@ -168,10 +174,10 @@ enum GhostMediaAppleHarness {
         print("received transport.bind")
         try sendResponse(
             #"{"v":1,"id":2,"type":"result","result":{"udp_port":51838,"path_state":"bound"}}"#,
-            to: connection.descriptor
+            to: connection.pointer
         )
 
-        let open = try receiveMessage(connection.descriptor, decoder: &decoder)
+        let open = try receiveMessage(connection.pointer, decoder: &decoder)
         try require(
             open.kind == .requestStreamOpen &&
                 open.id == 3 &&
@@ -184,71 +190,30 @@ enum GhostMediaAppleHarness {
             """
             {"v":1,"id":3,"type":"result","result":{"stream_id":1,"key_epoch":1,"profile":{"codec":"pcm_s16le","sample_rate_hz":48000,"channels":2,"channel_layout":"stereo","frames_per_packet":240},"packet_interval_us":5000,"path_state":"probing"}}
             """,
-            to: connection.descriptor
+            to: connection.pointer
         )
 
         print("control interop reached stream.open")
     }
 
     private static func makeListener(port: UInt16) throws -> SocketHandle {
-        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else {
-            throw HarnessError.systemCall(operation: "socket", code: errno)
+        var pointer: OpaquePointer?
+        try requireRuntimeOK(
+            gm_runtime_tcp_listen_ipv4(
+                port,
+                UInt32(socketTimeoutSeconds * 1_000),
+                &pointer
+            ),
+            operation: "listen"
+        )
+        guard let pointer else {
+            throw HarnessError.unexpectedMessage("listen returned no socket")
         }
-        let listener = SocketHandle(descriptor)
-
-        var reuseAddress: Int32 = 1
-        guard setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_REUSEADDR,
-            &reuseAddress,
-            socklen_t(MemoryLayout.size(ofValue: reuseAddress))
-        ) == 0 else {
-            throw HarnessError.systemCall(operation: "setsockopt(SO_REUSEADDR)", code: errno)
-        }
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = port.bigEndian
-        address.sin_addr = in_addr(s_addr: INADDR_ANY)
-
-        let bindResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(
-                    descriptor,
-                    $0,
-                    socklen_t(MemoryLayout<sockaddr_in>.size)
-                )
-            }
-        }
-        guard bindResult == 0 else {
-            throw HarnessError.systemCall(operation: "bind", code: errno)
-        }
-        guard Darwin.listen(descriptor, 1) == 0 else {
-            throw HarnessError.systemCall(operation: "listen", code: errno)
-        }
-        return listener
-    }
-
-    private static func configureTimeouts(_ descriptor: Int32) throws {
-        var timeout = timeval(tv_sec: socketTimeoutSeconds, tv_usec: 0)
-        for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
-            guard setsockopt(
-                descriptor,
-                SOL_SOCKET,
-                option,
-                &timeout,
-                socklen_t(MemoryLayout.size(ofValue: timeout))
-            ) == 0 else {
-                throw HarnessError.systemCall(operation: "setsockopt(timeout)", code: errno)
-            }
-        }
+        return SocketHandle(pointer)
     }
 
     private static func receiveMessage(
-        _ descriptor: Int32,
+        _ connection: OpaquePointer,
         decoder: inout ControlFrameDecoder
     ) throws -> ControlMessage {
         while true {
@@ -257,46 +222,53 @@ enum GhostMediaAppleHarness {
             }
 
             var bytes = [UInt8](repeating: 0, count: 4096)
-            let received = Darwin.recv(descriptor, &bytes, bytes.count, 0)
-            if received < 0 {
-                throw HarnessError.systemCall(operation: "recv", code: errno)
+            var received = 0
+            let status = bytes.withUnsafeMutableBytes { buffer in
+                gm_runtime_tcp_receive(
+                    connection,
+                    gm_mut_bytes(
+                        data: buffer.bindMemory(to: UInt8.self).baseAddress,
+                        size: buffer.count
+                    ),
+                    &received
+                )
             }
-            if received == 0 {
-                throw HarnessError.connectionClosed
-            }
+            try requireRuntimeOK(status, operation: "receive")
             decoder.append(Data(bytes.prefix(received)))
         }
     }
 
-    private static func sendResponse(_ json: String, to descriptor: Int32) throws {
+    private static func sendResponse(_ json: String, to connection: OpaquePointer) throws {
         _ = try ProtocolCore.parseControlMessage(json)
         let frame = try ProtocolCore.encodeControlFrame(json)
-        try frame.withUnsafeBytes { buffer in
-            guard let baseAddress = buffer.baseAddress else {
-                return
-            }
-            var sent = 0
-            while sent < buffer.count {
-                let result = Darwin.send(
-                    descriptor,
-                    baseAddress.advanced(by: sent),
-                    buffer.count - sent,
-                    0
+        let status = frame.withUnsafeBytes { buffer in
+            gm_runtime_tcp_send_all(
+                connection,
+                gm_bytes(
+                    data: buffer.bindMemory(to: UInt8.self).baseAddress,
+                    size: buffer.count
                 )
-                if result < 0 {
-                    throw HarnessError.systemCall(operation: "send", code: errno)
-                }
-                if result == 0 {
-                    throw HarnessError.connectionClosed
-                }
-                sent += result
-            }
+            )
         }
+        try requireRuntimeOK(status, operation: "send")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
         guard condition else {
             throw HarnessError.unexpectedMessage(message)
+        }
+    }
+
+    private static func requireRuntimeOK(
+        _ status: gm_status,
+        operation: String
+    ) throws {
+        guard status == GM_OK else {
+            throw HarnessError.runtime(
+                operation: operation,
+                status: String(cString: gm_status_string(status)),
+                detail: String(cString: gm_runtime_last_error())
+            )
         }
     }
 
@@ -421,9 +393,32 @@ enum GhostMediaAppleHarness {
             peerID == "6dx653pm5pvot2hh43s6jy7c4hqn7xw53tn5vwoy27lnlvgt2liq",
             "Apple peer ID did not match the Phase 2 vector"
         )
+        let tlsClient = try AppleOutputIdentity.ephemeral()
+        let tlsServer = try AppleOutputIdentity.ephemeral()
+        let liveContext = try ProtocolCore.exporterContext(
+            ExporterContextInput(
+                sessionID: sessionID,
+                streamID: 1,
+                direction: .windowsToApple,
+                keyEpoch: 1,
+                senderSPKIDigest: tlsClient.spkiDigest,
+                receiverSPKIDigest: tlsServer.spkiDigest
+            )
+        )
+        let liveExporter = try AppleRuntimeTLS.exporterPair(
+            client: tlsClient,
+            server: tlsServer,
+            clientExpectedServerSPKIDigest: tlsServer.spkiDigest,
+            serverExpectedClientSPKIDigest: tlsClient.spkiDigest,
+            context: liveContext
+        )
+        try require(
+            liveExporter.client == liveExporter.server,
+            "mutual TLS peers produced different exporter output"
+        )
         print("GhostMedia Apple Phase 2 vector harness")
         print("exporter label: \(ProtocolCore.tlsExporterLabel)")
-        print("peer ID, exporter context, and AES-256-GCM vectors: passed")
+        print("peer ID, exporter context, AES-256-GCM, and mutual TLS 1.3: passed")
     }
 
     private static func data(hex: String) -> Data {

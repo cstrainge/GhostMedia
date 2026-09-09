@@ -36,17 +36,25 @@ Windows application
        v
     Apple Output Server: mDNS/DNS-SD advertisement
        -> decrypt -> reorder/jitter buffer -> resample -> platform audio output
+
+Both userspace endpoints consume the same `GhostMediaRuntime` library for the
+currently implemented TCP socket operations, OpenSSL TLS 1.3,
+identity/certificate primitives, TLS exporters, and AES-256-GCM. Future UDP
+socket operations belong in this runtime rather than in either platform host.
 ```
 
 | Component | Owns | Must not depend on |
 | --- | --- | --- |
 | Driver | Endpoint, render clock, bounded bridge, local counters | Sockets, TLS, codecs, UI, remote consumption |
-| Windows control client / media sender | Configured-server selection, TCP client sessions, source timeline, UDP send keys, packetizer | Apple availability for driver progress |
-| Apple output server / media receiver | Discovery, identity, TCP listener, UDP receive keys, playout clock and jitter buffer | Arrival of one packet per output callback |
+| Shared runtime | Cross-platform transport sockets, OpenSSL TLS/identity/exporters, AES-GCM, bounded transport I/O | UI, platform audio, driver callbacks, trust decisions |
+| Windows control client / media sender | Configured-server selection, runtime session orchestration, source timeline, UDP send keys, packetizer | Apple availability for driver progress |
+| Apple output server / media receiver | Discovery, protected identity/trust persistence, runtime listener orchestration, playout clock and jitter buffer | Arrival of one packet per output callback |
 | Windows Control Panel | Server selection, trust decisions, configuration, status | Participation in real-time processing |
 
-`WinDevice/` will contain Windows-only driver, service, and supporting UI/build
-code. `AppleOutputServer/` will contain the macOS application; an iOS implementation follows
+`shared/` contains the deterministic protocol core. `runtime/` contains the
+cross-platform networking and OpenSSL implementation used by both userspace
+endpoints. `WinDevice/` contains Windows-only driver, service, and supporting
+UI/build code. `AppleOutputServer/` contains the macOS application; an iOS implementation follows
 the same Apple output-server role while its app is active. When an iOS app cannot
 continue its listener or audio output under the operating system's lifecycle rules,
 it withdraws discovery and stops the active stream; Windows reconnects only after the

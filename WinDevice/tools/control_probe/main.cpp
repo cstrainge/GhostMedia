@@ -1,22 +1,15 @@
 #include <ghostmedia/gm_core.h>
+#include <ghostmedia/gm_runtime.h>
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -41,37 +34,23 @@ struct ReceivedMessage {
     gm_control_message_info info;
 };
 
-class WinsockRuntime {
-public:
-    WinsockRuntime() {
-        WSADATA data{};
-        const int result = WSAStartup(MAKEWORD(2, 2), &data);
-        if (result != 0) {
-            throw std::runtime_error("WSAStartup failed: " + std::to_string(result));
-        }
-    }
-
-    WinsockRuntime(const WinsockRuntime &) = delete;
-    WinsockRuntime &operator=(const WinsockRuntime &) = delete;
-
-    ~WinsockRuntime() {
-        WSACleanup();
-    }
-};
-
 class SocketHandle {
 public:
-    explicit SocketHandle(SOCKET socket_handle = INVALID_SOCKET) : socket_handle_(socket_handle) {}
+    explicit SocketHandle(gm_runtime_tcp_socket *socket_handle = nullptr)
+        : socket_handle_(socket_handle) {}
 
     SocketHandle(const SocketHandle &) = delete;
     SocketHandle &operator=(const SocketHandle &) = delete;
 
-    SocketHandle(SocketHandle &&other) noexcept : socket_handle_(std::exchange(other.socket_handle_, INVALID_SOCKET)) {}
+    SocketHandle(SocketHandle &&other) noexcept : socket_handle_(other.socket_handle_) {
+        other.socket_handle_ = nullptr;
+    }
 
     SocketHandle &operator=(SocketHandle &&other) noexcept {
         if (this != &other) {
             close();
-            socket_handle_ = std::exchange(other.socket_handle_, INVALID_SOCKET);
+            socket_handle_ = other.socket_handle_;
+            other.socket_handle_ = nullptr;
         }
         return *this;
     }
@@ -80,23 +59,23 @@ public:
         close();
     }
 
-    SOCKET get() const {
+    gm_runtime_tcp_socket *get() const {
         return socket_handle_;
     }
 
     bool valid() const {
-        return socket_handle_ != INVALID_SOCKET;
+        return socket_handle_ != nullptr;
     }
 
 private:
     void close() {
-        if (socket_handle_ != INVALID_SOCKET) {
-            closesocket(socket_handle_);
-            socket_handle_ = INVALID_SOCKET;
+        if (socket_handle_ != nullptr) {
+            gm_runtime_tcp_socket_destroy(socket_handle_);
+            socket_handle_ = nullptr;
         }
     }
 
-    SOCKET socket_handle_;
+    gm_runtime_tcp_socket *socket_handle_;
 };
 
 [[noreturn]] void fail_with_usage(const std::string &message);
@@ -370,87 +349,46 @@ void validate_path_headers(const gm_control_message_info &open_result, std::stri
     }
 }
 
-std::string winsock_error(const std::string &operation, int error_code) {
-    return operation + " failed with WSA error " + std::to_string(error_code);
-}
-
-void set_socket_timeout(SOCKET socket_handle, uint32_t timeout_ms) {
-    const DWORD timeout_value = timeout_ms;
-    setsockopt(socket_handle, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout_value), sizeof(timeout_value));
-    setsockopt(socket_handle, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&timeout_value), sizeof(timeout_value));
+std::string runtime_error(const std::string &operation, gm_status status) {
+    return operation + " failed: " + gm_status_string(status) + ": " + gm_runtime_last_error();
 }
 
 SocketHandle connect_tcp(const std::string &host, uint16_t port) {
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    addrinfo *address_list = nullptr;
-    const std::string port_text = std::to_string(port);
-    const int lookup_result = getaddrinfo(host.c_str(), port_text.c_str(), &hints, &address_list);
-    if (lookup_result != 0) {
-        throw std::runtime_error("getaddrinfo failed: " + std::to_string(lookup_result));
+    gm_runtime_tcp_socket *connection = nullptr;
+    const gm_status status = gm_runtime_tcp_connect(
+        host.c_str(),
+        port,
+        kDefaultReceiveTimeoutMs,
+        &connection);
+    if (status != GM_OK || connection == nullptr) {
+        throw std::runtime_error(runtime_error("connect", status));
     }
-
-    int last_error = 0;
-    for (addrinfo *address_cursor = address_list; address_cursor != nullptr; address_cursor = address_cursor->ai_next) {
-        SocketHandle socket_handle(socket(address_cursor->ai_family, address_cursor->ai_socktype, address_cursor->ai_protocol));
-        if (!socket_handle.valid()) {
-            last_error = WSAGetLastError();
-            continue;
-        }
-        set_socket_timeout(socket_handle.get(), kDefaultReceiveTimeoutMs);
-        if (connect(socket_handle.get(), address_cursor->ai_addr, static_cast<int>(address_cursor->ai_addrlen)) == 0) {
-            freeaddrinfo(address_list);
-            return socket_handle;
-        }
-        last_error = WSAGetLastError();
-    }
-
-    freeaddrinfo(address_list);
-    throw std::runtime_error(winsock_error("connect", last_error));
+    return SocketHandle(connection);
 }
 
-void send_all(SOCKET socket_handle, const uint8_t *data, size_t size) {
-    size_t sent_total = 0u;
-    while (sent_total < size) {
-        const size_t remaining = size - sent_total;
-        const int chunk_size = static_cast<int>(std::min<size_t>(remaining, static_cast<size_t>(std::numeric_limits<int>::max())));
-        const int sent = send(socket_handle, reinterpret_cast<const char *>(data + sent_total), chunk_size, 0);
-        if (sent == SOCKET_ERROR) {
-            throw std::runtime_error(winsock_error("send", WSAGetLastError()));
-        }
-        if (sent == 0) {
-            throw std::runtime_error("send returned 0 bytes");
-        }
-        sent_total += static_cast<size_t>(sent);
+void send_all(gm_runtime_tcp_socket *socket_handle, const uint8_t *data, size_t size) {
+    const gm_status status = gm_runtime_tcp_send_all(socket_handle, gm_bytes{data, size});
+    if (status != GM_OK) {
+        throw std::runtime_error(runtime_error("send", status));
     }
 }
 
-void recv_all(SOCKET socket_handle, uint8_t *data, size_t size) {
-    size_t received_total = 0u;
-    while (received_total < size) {
-        const size_t remaining = size - received_total;
-        const int chunk_size = static_cast<int>(std::min<size_t>(remaining, static_cast<size_t>(std::numeric_limits<int>::max())));
-        const int received = recv(socket_handle, reinterpret_cast<char *>(data + received_total), chunk_size, 0);
-        if (received == SOCKET_ERROR) {
-            throw std::runtime_error(winsock_error("recv", WSAGetLastError()));
-        }
-        if (received == 0) {
-            throw std::runtime_error("peer closed the TCP connection");
-        }
-        received_total += static_cast<size_t>(received);
+void recv_all(gm_runtime_tcp_socket *socket_handle, uint8_t *data, size_t size) {
+    const gm_status status = gm_runtime_tcp_receive_exact(
+        socket_handle,
+        gm_mut_bytes{data, size});
+    if (status != GM_OK) {
+        throw std::runtime_error(runtime_error("receive", status));
     }
 }
 
-void send_control_json(SOCKET socket_handle, const std::string &json, const std::string &label) {
+void send_control_json(gm_runtime_tcp_socket *socket_handle, const std::string &json, const std::string &label) {
     const std::vector<uint8_t> frame = encode_control_frame(json, label);
     send_all(socket_handle, frame.data(), frame.size());
     std::cout << "sent " << label << " (" << json.size() << " JSON bytes)\n";
 }
 
-ReceivedMessage receive_control_message(SOCKET socket_handle) {
+ReceivedMessage receive_control_message(gm_runtime_tcp_socket *socket_handle) {
     std::array<uint8_t, GM_CONTROL_FRAME_HEADER_BYTES> header{};
     recv_all(socket_handle, header.data(), header.size());
 
@@ -478,7 +416,10 @@ ReceivedMessage receive_control_message(SOCKET socket_handle) {
     return received;
 }
 
-gm_control_message_info receive_result_for_id(SOCKET socket_handle, uint32_t expected_id, const std::string &label) {
+gm_control_message_info receive_result_for_id(
+    gm_runtime_tcp_socket *socket_handle,
+    uint32_t expected_id,
+    const std::string &label) {
     for (uint32_t frame_count = 0u; frame_count < 8u; ++frame_count) {
         ReceivedMessage received = receive_control_message(socket_handle);
         if (received.info.kind == GM_CONTROL_RESPONSE_RESULT && received.info.id == expected_id) {
@@ -527,7 +468,6 @@ void run_dry_run(const Options &options) {
 
 void run_connect(const Options &options) {
     std::cout << "warning: using pre-TLS framed TCP for first interop only; this is not v1-conformant transport\n";
-    WinsockRuntime winsock_runtime{};
     SocketHandle socket_handle = connect_tcp(options.host, options.port);
     std::cout << "connected to " << options.host << ':' << options.port << "\n";
 

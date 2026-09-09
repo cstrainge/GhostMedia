@@ -23,7 +23,7 @@ Expected tests:
 gm_core_tests
 gm_phase2_vectors_tests
 gm_core_c_abi_tests
-win_crypto_provider_tests
+runtime_security_tests
 win_control_probe_dry_run
 ```
 

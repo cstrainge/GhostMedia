@@ -78,9 +78,6 @@ install(TARGETS gm_core
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ghostmedia)
 
-install(FILES include/module.modulemap
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
 install(EXPORT GhostMediaTargets
     NAMESPACE GhostMedia::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/GhostMedia)

@@ -78,19 +78,19 @@ results. The initial run should prove:
   the Swift-side peer ID, exporter-context, media AAD, nonce, key split, AES-GCM,
   replay, and epoch-grace checks.
 
-## Non-Goals For This Slice
+## Remaining Non-Goals For This Slice
 
-- No real sockets, TLS, mDNS, Keychain, Core Audio, AVFoundation, or UI.
+- No production TLS listener, mDNS, UDP media, Core Audio, AVFoundation, or UI.
 - No platform JSON parser for protocol acceptance decisions.
-- No duplicated AES-GCM, TLS exporter, or certificate-policy decisions outside the
-  Phase 2 vector contract.
+- No duplicated socket, AES-GCM, TLS exporter, identity, or certificate-policy
+  implementations outside `GhostMediaRuntime`.
 - No output device enumeration; v1 uses only the local system-default output route.
 
 ## Phase 2 Mac-Side Obligations
 
-The Windows side now publishes the shared Phase 2 vector lock and a BCrypt-backed
-AES-256-GCM adapter test. The Mac side should use the same fixture corpus to verify
-its Keychain identity, TLS exporter, and CryptoKit or lower-level AES-GCM adapter:
+Windows and Apple now consume `GhostMediaRuntime`, which uses OpenSSL 3 for the
+shared identity, pinned mutual-TLS, exporter, and AES-256-GCM implementation. The
+Apple side persists identity and trust material in the device-local Keychain:
 
 - Encode the SPKI SHA-256 digest through `gm_identity_encode_peer_id` and compare
   the full 52-character value shown in local pairing UI.

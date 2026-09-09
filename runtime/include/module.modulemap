@@ -1,0 +1,4 @@
+module GhostMediaRuntime {
+    header "ghostmedia/gm_runtime.h"
+    export *
+}

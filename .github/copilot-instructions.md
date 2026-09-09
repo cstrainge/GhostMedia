@@ -21,7 +21,8 @@ Run one registered CTest test:
 ctest --preset default -R '^gm_core_tests$'
 ```
 
-The shared build also registers `gm_core_c_abi_tests`; both are custom test
+The shared build also registers `gm_core_c_abi_tests`,
+`gm_phase2_vectors_tests`, and `runtime_security_tests`; these are custom test
 executables and do not support filtering their individual test functions.
 
 On Windows, use the checked-in MSVC preset:
@@ -44,6 +45,7 @@ xcrun swift build --product GhostMediaAppleHarness
 xcrun swift build --product GhostMediaMac
 xcrun swift test
 xcrun swift run GhostMediaAppleHarness
+xcrun swift run GhostMediaRuntimeTests
 xcrun swift run GhostMediaMac
 ```
 
@@ -69,6 +71,11 @@ There is no standalone lint target. CMake builds enforce C++20 and compile with
   wire parsing/serialization, validation, protocol state, timing arithmetic, and
   bounded protocol policy; it must not own sockets, TLS engines, threads, UI,
   filesystems, device APIs, or platform audio.
+- `runtime/` is the cross-platform C++ userspace runtime. It owns OpenSSL
+  identity/certificate operations, TLS 1.3, exporters, AES-256-GCM, and the
+  currently implemented portable TCP socket mechanics. Add future UDP mechanics
+  here rather than in a platform host. Platform hosts own lifecycle, interface
+  policy, protected persistence, trust decisions, UI, and audio.
 - `shared/include/ghostmedia/gm_core.h` is the cross-language C ABI. CMake builds
   it as `gm_core`; SwiftPM compiles the same sources as `GhostMediaCore`.
 - `WinDevice/` owns Windows-only code. The current implementation is only the
@@ -80,7 +87,8 @@ There is no standalone lint target. CMake builds enforce C++20 and compile with
   `GhostMediaProtocolBridge` alone wraps raw C ABI calls into safe Swift values.
   Apple core/UI code must not duplicate protocol parsing or state transitions.
 - `GhostMediaAppleHarness` is the deterministic Phase 1 CLI. Keep it free of UI,
-  TLS, DNS-SD, Keychain, UDP media, and audio dependencies. Its explicit
+  DNS-SD, Keychain, UDP media, and audio dependencies. It may exercise the shared
+  runtime TLS and TCP boundaries. Its explicit
   `--listen <port> --allow-plaintext` mode is the only Phase 1 TCP exception and
   must remain a one-shot test endpoint.
 - The Windows service is the TCP control client and UDP media sender. The

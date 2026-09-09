@@ -10,12 +10,20 @@ let package = Package(
     ],
     products: [
         .library(name: "GhostMediaCore", targets: ["GhostMediaCore"]),
+        .library(name: "GhostMediaRuntime", targets: ["GhostMediaRuntime"]),
         .library(name: "GhostMediaProtocolBridge", targets: ["GhostMediaProtocolBridge"]),
         .library(name: "GhostMediaAppleCore", targets: ["GhostMediaAppleCore"]),
         .library(name: "GhostMediaAppleSecurity", targets: ["GhostMediaAppleSecurity"]),
         .library(name: "GhostMediaAppleUI", targets: ["GhostMediaAppleUI"]),
         .executable(name: "GhostMediaAppleHarness", targets: ["GhostMediaAppleHarness"]),
+        .executable(name: "GhostMediaWinControlProbe", targets: ["GhostMediaWinControlProbe"]),
         .executable(name: "GhostMediaMac", targets: ["GhostMediaMac"]),
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/krzyzanowskim/OpenSSL-Package.git",
+            exact: "3.6.3000"
+        ),
     ],
     targets: [
         .target(
@@ -32,12 +40,24 @@ let package = Package(
             path: "AppleOutputServer/Sources/GhostMediaProtocolBridge"
         ),
         .target(
+            name: "GhostMediaRuntime",
+            dependencies: [
+                "GhostMediaCore",
+                .product(name: "OpenSSL", package: "OpenSSL-Package"),
+            ],
+            path: "runtime",
+            exclude: ["CMakeLists.txt", "tests"],
+            sources: ["core"],
+            publicHeadersPath: "include",
+            cxxSettings: [.headerSearchPath("include")]
+        ),
+        .target(
             name: "GhostMediaAppleCore",
             path: "AppleOutputServer/Sources/GhostMediaAppleCore"
         ),
         .target(
             name: "GhostMediaAppleSecurity",
-            dependencies: ["GhostMediaProtocolBridge"],
+            dependencies: ["GhostMediaProtocolBridge", "GhostMediaRuntime"],
             path: "AppleOutputServer/Sources/GhostMediaAppleSecurity"
         ),
         .target(
@@ -54,6 +74,19 @@ let package = Package(
             name: "GhostMediaMac",
             dependencies: ["GhostMediaAppleCore", "GhostMediaAppleUI"],
             path: "AppleOutputServer/Sources/GhostMediaMac"
+        ),
+        .executableTarget(
+            name: "GhostMediaWinControlProbe",
+            dependencies: ["GhostMediaCore", "GhostMediaRuntime"],
+            path: "WinDevice/tools/control_probe"
+        ),
+        .executableTarget(
+            name: "GhostMediaRuntimeTests",
+            dependencies: [
+                "GhostMediaRuntime",
+                .product(name: "OpenSSL", package: "OpenSSL-Package"),
+            ],
+            path: "runtime/tests"
         ),
         .testTarget(
             name: "GhostMediaAppleCoreTests",

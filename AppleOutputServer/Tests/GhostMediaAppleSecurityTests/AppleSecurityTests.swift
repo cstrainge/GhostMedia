@@ -15,6 +15,15 @@ private final class MemorySecureStore: SecureValueStore, @unchecked Sendable {
     func set(_ data: Data, for key: String) throws {
         lock.withLock { values[key] = data }
     }
+
+    func value(for key: String) -> Data? {
+        lock.withLock { values[key] }
+    }
+}
+
+private struct StoredIdentityFixture: Codable {
+    let privateKeyPKCS8: Data
+    let certificateDER: Data
 }
 
 private struct Phase2Vectors: Decodable {
@@ -390,6 +399,48 @@ func identityAndTrustRecordsPersistAndRejectCorruption() throws {
     #expect(first.peerID == second.peerID)
     #expect(first.spkiDER == second.spkiDER)
     #expect(first.certificateDER == second.certificateDER)
+
+    let storedData = try #require(
+        store.value(for: "identity-ed25519-pkcs8-and-certificate")
+    )
+    let stored = try PropertyListDecoder().decode(
+        StoredIdentityFixture.self,
+        from: storedData
+    )
+    #expect(stored.privateKeyPKCS8.count >= 32)
+    let legacyPrivateKey = Data(stored.privateKeyPKCS8.suffix(32))
+    let legacyStore = MemorySecureStore()
+    try legacyStore.set(
+        Data(first.serverID.uuidString.lowercased().utf8),
+        for: "server-id"
+    )
+    try legacyStore.set(
+        legacyPrivateKey,
+        for: "identity-ed25519-private-key"
+    )
+    try legacyStore.set(
+        stored.certificateDER,
+        for: "identity-ed25519-leaf-certificate"
+    )
+    let migrated = try AppleIdentityManager(store: legacyStore).loadOrCreate()
+    #expect(migrated.serverID == first.serverID)
+    #expect(migrated.peerID == first.peerID)
+    #expect(migrated.certificateDER == first.certificateDER)
+    #expect(
+        legacyStore.value(
+            for: "identity-ed25519-pkcs8-and-certificate"
+        ) != nil
+    )
+
+    let partialLegacyStore = MemorySecureStore()
+    try partialLegacyStore.set(
+        legacyPrivateKey,
+        for: "identity-ed25519-private-key"
+    )
+    #expect(throwsError {
+        _ = try AppleIdentityManager(store: partialLegacyStore).loadOrCreate()
+    })
+
     let certificate = try #require(
         SecCertificateCreateWithData(nil, first.certificateDER as CFData)
     )
@@ -405,6 +456,38 @@ func identityAndTrustRecordsPersistAndRejectCorruption() throws {
     #expect(SecTrustSetAnchorCertificates(certificateTrust, [certificate] as CFArray) == errSecSuccess)
     #expect(SecTrustSetAnchorCertificatesOnly(certificateTrust, true) == errSecSuccess)
     #expect(SecTrustEvaluateWithError(certificateTrust, nil))
+
+    let tlsPeer = try AppleOutputIdentity.ephemeral()
+    let exporterContext = try ProtocolCore.exporterContext(
+        ExporterContextInput(
+            sessionID: data(hex: vectors.tlsExporter.sessionIDHex),
+            streamID: vectors.tlsExporter.streamID,
+            direction: .windowsToApple,
+            keyEpoch: vectors.tlsExporter.keyEpoch,
+            senderSPKIDigest: first.spkiDigest,
+            receiverSPKIDigest: tlsPeer.spkiDigest
+        )
+    )
+    let exporter = try AppleRuntimeTLS.exporterPair(
+        client: first,
+        server: tlsPeer,
+        clientExpectedServerSPKIDigest: tlsPeer.spkiDigest,
+        serverExpectedClientSPKIDigest: first.spkiDigest,
+        context: exporterContext
+    )
+    #expect(exporter.client == exporter.server)
+    #expect(exporter.client.count == ProtocolCore.tlsExporterOutputLength)
+    var wrongServerPin = tlsPeer.spkiDigest
+    wrongServerPin[wrongServerPin.startIndex] ^= 1
+    #expect(throwsError {
+        _ = try AppleRuntimeTLS.exporterPair(
+            client: first,
+            server: tlsPeer,
+            clientExpectedServerSPKIDigest: wrongServerPin,
+            serverExpectedClientSPKIDigest: first.spkiDigest,
+            context: exporterContext
+        )
+    })
 
     let trustStore = AppleTrustStore(store: store)
     let trustRecord = StoredTrustRecord(
@@ -429,7 +512,10 @@ func identityAndTrustRecordsPersistAndRejectCorruption() throws {
 
     let corruptCertificateStore = MemorySecureStore()
     _ = try AppleIdentityManager(store: corruptCertificateStore).loadOrCreate()
-    try corruptCertificateStore.set(Data([0x01, 0x02]), for: "identity-ed25519-leaf-certificate")
+    try corruptCertificateStore.set(
+        Data([0x01, 0x02]),
+        for: "identity-ed25519-pkcs8-and-certificate"
+    )
     #expect(throwsError {
         _ = try AppleIdentityManager(store: corruptCertificateStore).loadOrCreate()
     })

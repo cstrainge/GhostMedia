@@ -1,7 +1,18 @@
-import CryptoKit
 import Foundation
 import GhostMediaProtocolBridge
-import Security
+import GhostMediaRuntime
+
+fileprivate final class RuntimeIdentityHandle: @unchecked Sendable {
+    let pointer: OpaquePointer
+
+    init(pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+
+    deinit {
+        gm_runtime_identity_destroy(pointer)
+    }
+}
 
 public struct AppleOutputIdentity: Sendable {
     public let serverID: UUID
@@ -10,35 +21,90 @@ public struct AppleOutputIdentity: Sendable {
     public let spkiDigest: Data
     public let certificateDER: Data
 
-    private let privateKey: Curve25519.Signing.PrivateKey
+    fileprivate let runtimeIdentity: RuntimeIdentityHandle
 
-    init(
+    fileprivate init(
         serverID: UUID,
-        privateKey: Curve25519.Signing.PrivateKey,
-        certificateDER: Data
+        runtimeIdentity: RuntimeIdentityHandle
     ) throws {
-        let spkiDER = DER.ed25519SubjectPublicKeyInfo(
-            rawPublicKey: privateKey.publicKey.rawRepresentation
+        let spkiDER = try runtimeIdentity.copyVariableOutput(
+            operation: "gm_runtime_identity_spki_der",
+            gm_runtime_identity_spki_der
         )
-        let digest = Data(SHA256.hash(data: spkiDER))
+        var digest = Data(count: 32)
+        let digestStatus = digest.withUnsafeMutableBytes { bytes in
+            gm_runtime_identity_spki_sha256(
+                runtimeIdentity.pointer,
+                gm_mut_bytes(
+                    data: bytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: bytes.count
+                )
+            )
+        }
+        try requireRuntimeOK(
+            digestStatus,
+            operation: "gm_runtime_identity_spki_sha256"
+        )
+        let certificateDER = try runtimeIdentity.copyVariableOutput(
+            operation: "gm_runtime_identity_certificate_der",
+            gm_runtime_identity_certificate_der
+        )
         self.serverID = serverID
-        self.privateKey = privateKey
+        self.runtimeIdentity = runtimeIdentity
         self.spkiDER = spkiDER
         self.spkiDigest = digest
         self.peerID = try ProtocolCore.peerID(forSPKIDigest: digest)
         self.certificateDER = certificateDER
     }
 
+    public static func ephemeral(serverID: UUID = UUID()) throws -> AppleOutputIdentity {
+        var pointer: OpaquePointer?
+        try requireRuntimeOK(
+            gm_runtime_identity_generate(&pointer),
+            operation: "gm_runtime_identity_generate"
+        )
+        guard let pointer else {
+            throw AppleCryptoError.runtimeFailure(
+                operation: "gm_runtime_identity_generate",
+                status: "missing identity"
+            )
+        }
+        return try AppleOutputIdentity(
+            serverID: serverID,
+            runtimeIdentity: RuntimeIdentityHandle(pointer: pointer)
+        )
+    }
+
     public func signature(for data: Data) throws -> Data {
-        try privateKey.signature(for: data)
+        try data.withUnsafeBytes { messageBytes in
+            try runtimeIdentity.copyVariableOutput(
+                operation: "gm_runtime_identity_sign"
+            ) { identity, output, written in
+                gm_runtime_identity_sign(
+                    identity,
+                    gm_bytes(
+                        data: messageBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: messageBytes.count
+                    ),
+                    output,
+                    written
+                )
+            }
+        }
     }
 }
 
 public struct AppleIdentityManager: Sendable {
     private enum Key {
         static let serverID = "server-id"
-        static let signingKey = "identity-ed25519-private-key"
-        static let certificate = "identity-ed25519-leaf-certificate"
+        static let identity = "identity-ed25519-pkcs8-and-certificate"
+        static let legacySigningKey = "identity-ed25519-private-key"
+        static let legacyCertificate = "identity-ed25519-leaf-certificate"
+    }
+
+    private struct StoredIdentity: Codable {
+        let privateKeyPKCS8: Data
+        let certificateDER: Data
     }
 
     private let store: any SecureValueStore
@@ -49,23 +115,37 @@ public struct AppleIdentityManager: Sendable {
 
     public func loadOrCreate() throws -> AppleOutputIdentity {
         let serverID = try loadOrCreateServerID()
-        let privateKey = try loadOrCreatePrivateKey()
-        let certificateDER: Data
-        if let storedCertificate = try store.data(for: Key.certificate) {
-            certificateDER = storedCertificate
-            try validateCertificate(certificateDER, privateKey: privateKey)
+        let runtimeIdentity: RuntimeIdentityHandle
+        if let storedData = try store.data(for: Key.identity) {
+            let stored: StoredIdentity
+            do {
+                stored = try PropertyListDecoder().decode(
+                    StoredIdentity.self,
+                    from: storedData
+                )
+            } catch {
+                throw SecureStoreError.invalidStoredValue(Key.identity)
+            }
+            runtimeIdentity = try loadOrRenewIdentity(stored)
         } else {
-            certificateDER = try SelfSignedCertificate.make(
-                privateKey: privateKey,
-                commonName: "GhostMedia Output Server"
-            )
-            try validateCertificate(certificateDER, privateKey: privateKey)
-            try store.set(certificateDER, for: Key.certificate)
+            let legacyKey = try store.data(for: Key.legacySigningKey)
+            let legacyCertificate = try store.data(for: Key.legacyCertificate)
+            if let legacyKey, let legacyCertificate {
+                runtimeIdentity = try loadLegacyIdentity(
+                    privateKeyRaw: legacyKey,
+                    certificateDER: legacyCertificate
+                )
+                try persist(runtimeIdentity)
+            } else if legacyKey != nil || legacyCertificate != nil {
+                throw SecureStoreError.invalidStoredValue(Key.identity)
+            } else {
+                runtimeIdentity = try generateIdentity()
+                try persist(runtimeIdentity)
+            }
         }
         return try AppleOutputIdentity(
             serverID: serverID,
-            privateKey: privateKey,
-            certificateDER: certificateDER
+            runtimeIdentity: runtimeIdentity
         )
     }
 
@@ -83,42 +163,231 @@ public struct AppleIdentityManager: Sendable {
         return serverID
     }
 
-    private func loadOrCreatePrivateKey() throws -> Curve25519.Signing.PrivateKey {
-        if let stored = try store.data(for: Key.signingKey) {
-            do {
-                return try Curve25519.Signing.PrivateKey(rawRepresentation: stored)
-            } catch {
-                throw SecureStoreError.invalidStoredValue(Key.signingKey)
-            }
+    private func generateIdentity() throws -> RuntimeIdentityHandle {
+        var pointer: OpaquePointer?
+        try requireRuntimeOK(
+            gm_runtime_identity_generate(&pointer),
+            operation: "gm_runtime_identity_generate"
+        )
+        guard let pointer else {
+            throw AppleCryptoError.runtimeFailure(
+                operation: "gm_runtime_identity_generate",
+                status: "missing identity"
+            )
         }
-
-        let privateKey = Curve25519.Signing.PrivateKey()
-        try store.set(privateKey.rawRepresentation, for: Key.signingKey)
-        return privateKey
+        return RuntimeIdentityHandle(pointer: pointer)
     }
 
-    private func validateCertificate(
-        _ certificateDER: Data,
-        privateKey: Curve25519.Signing.PrivateKey
-    ) throws {
-        guard let certificate = SecCertificateCreateWithData(
-            nil,
-            certificateDER as CFData
-        ),
-        let publicKey = SecCertificateCopyKey(certificate) else {
-            throw SecureStoreError.invalidStoredValue(Key.certificate)
+    private func loadOrRenewIdentity(_ stored: StoredIdentity) throws -> RuntimeIdentityHandle {
+        var pointer: OpaquePointer?
+        let status = stored.privateKeyPKCS8.withUnsafeBytes { keyBytes in
+            stored.certificateDER.withUnsafeBytes { certificateBytes in
+                gm_runtime_identity_load(
+                    gm_bytes(
+                        data: keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: keyBytes.count
+                    ),
+                    gm_bytes(
+                        data: certificateBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: certificateBytes.count
+                    ),
+                    &pointer
+                )
+            }
         }
+        if status == GM_STATE_CONFLICT {
+            let renewed = try renewIdentity(privateKeyPKCS8: stored.privateKeyPKCS8)
+            try persist(renewed)
+            return renewed
+        }
+        guard status == GM_OK, let pointer else {
+            throw SecureStoreError.invalidStoredValue(Key.identity)
+        }
+        return RuntimeIdentityHandle(pointer: pointer)
+    }
 
-        var error: Unmanaged<CFError>?
-        guard let externalRepresentation = SecKeyCopyExternalRepresentation(publicKey, &error)
-        else {
-            throw SecureStoreError.invalidStoredValue(Key.certificate)
+    private func loadLegacyIdentity(
+        privateKeyRaw: Data,
+        certificateDER: Data
+    ) throws -> RuntimeIdentityHandle {
+        var pointer: OpaquePointer?
+        let status = privateKeyRaw.withUnsafeBytes { keyBytes in
+            certificateDER.withUnsafeBytes { certificateBytes in
+                gm_runtime_identity_load_raw_ed25519(
+                    gm_bytes(
+                        data: keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: keyBytes.count
+                    ),
+                    gm_bytes(
+                        data: certificateBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: certificateBytes.count
+                    ),
+                    &pointer
+                )
+            }
         }
-        let keyBytes = externalRepresentation as Data
-        guard keyBytes.suffix(privateKey.publicKey.rawRepresentation.count) ==
-                privateKey.publicKey.rawRepresentation else {
-            throw SecureStoreError.invalidStoredValue(Key.certificate)
+        if status == GM_STATE_CONFLICT {
+            return try renewLegacyIdentity(privateKeyRaw: privateKeyRaw)
         }
+        guard status == GM_OK, let pointer else {
+            throw SecureStoreError.invalidStoredValue(Key.identity)
+        }
+        return RuntimeIdentityHandle(pointer: pointer)
+    }
+
+    private func renewLegacyIdentity(privateKeyRaw: Data) throws -> RuntimeIdentityHandle {
+        var pointer: OpaquePointer?
+        let status = privateKeyRaw.withUnsafeBytes { keyBytes in
+            gm_runtime_identity_renew_raw_ed25519(
+                gm_bytes(
+                    data: keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: keyBytes.count
+                ),
+                &pointer
+            )
+        }
+        guard status == GM_OK, let pointer else {
+            throw SecureStoreError.invalidStoredValue(Key.identity)
+        }
+        return RuntimeIdentityHandle(pointer: pointer)
+    }
+
+    private func renewIdentity(privateKeyPKCS8: Data) throws -> RuntimeIdentityHandle {
+        var pointer: OpaquePointer?
+        let status = privateKeyPKCS8.withUnsafeBytes { keyBytes in
+            gm_runtime_identity_renew_certificate(
+                gm_bytes(
+                    data: keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: keyBytes.count
+                ),
+                &pointer
+            )
+        }
+        guard status == GM_OK, let pointer else {
+            throw SecureStoreError.invalidStoredValue(Key.identity)
+        }
+        return RuntimeIdentityHandle(pointer: pointer)
+    }
+
+    private func persist(_ identity: RuntimeIdentityHandle) throws {
+        let stored = StoredIdentity(
+            privateKeyPKCS8: try identity.copyVariableOutput(
+                operation: "gm_runtime_identity_private_key_pkcs8",
+                gm_runtime_identity_private_key_pkcs8
+            ),
+            certificateDER: try identity.copyVariableOutput(
+                operation: "gm_runtime_identity_certificate_der",
+                gm_runtime_identity_certificate_der
+            )
+        )
+        try store.set(
+            try PropertyListEncoder().encode(stored),
+            for: Key.identity
+        )
+    }
+
+}
+
+public enum AppleRuntimeTLS {
+    public static func exporterPair(
+        client: AppleOutputIdentity,
+        server: AppleOutputIdentity,
+        clientExpectedServerSPKIDigest: Data,
+        serverExpectedClientSPKIDigest: Data,
+        context: Data
+    ) throws -> (client: Data, server: Data) {
+        guard context.count == ProtocolCore.tlsExporterContextLength else {
+            throw AppleCryptoError.invalidExporterContextLength(context.count)
+        }
+        var clientOutput = Data(count: ProtocolCore.tlsExporterOutputLength)
+        var serverOutput = Data(count: ProtocolCore.tlsExporterOutputLength)
+        let status = clientExpectedServerSPKIDigest.withUnsafeBytes { serverPinBytes in
+            serverExpectedClientSPKIDigest.withUnsafeBytes { clientPinBytes in
+                context.withUnsafeBytes { contextBytes in
+                    clientOutput.withUnsafeMutableBytes { clientBytes in
+                        serverOutput.withUnsafeMutableBytes { serverBytes in
+                            gm_runtime_tls13_exporter_pair(
+                                client.runtimeIdentity.pointer,
+                                server.runtimeIdentity.pointer,
+                                gm_bytes(
+                                    data: serverPinBytes.bindMemory(to: UInt8.self).baseAddress,
+                                    size: serverPinBytes.count
+                                ),
+                                gm_bytes(
+                                    data: clientPinBytes.bindMemory(to: UInt8.self).baseAddress,
+                                    size: clientPinBytes.count
+                                ),
+                                gm_bytes(
+                                    data: contextBytes.bindMemory(to: UInt8.self).baseAddress,
+                                    size: contextBytes.count
+                                ),
+                                gm_mut_bytes(
+                                    data: clientBytes.bindMemory(to: UInt8.self).baseAddress,
+                                    size: clientBytes.count
+                                ),
+                                gm_mut_bytes(
+                                    data: serverBytes.bindMemory(to: UInt8.self).baseAddress,
+                                    size: serverBytes.count
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        try requireRuntimeOK(
+            status,
+            operation: "gm_runtime_tls13_exporter_pair"
+        )
+        return (clientOutput, serverOutput)
+    }
+}
+
+private extension RuntimeIdentityHandle {
+    func copyVariableOutput(
+        operation: String,
+        _ call: (
+            OpaquePointer?,
+            gm_mut_bytes,
+            UnsafeMutablePointer<Int>?
+        ) -> gm_status
+    ) throws -> Data {
+        var required = 0
+        let sizeStatus = call(
+            pointer,
+            gm_mut_bytes(data: nil, size: 0),
+            &required
+        )
+        guard sizeStatus == GM_BUFFER_TOO_SMALL, required > 0 else {
+            try requireRuntimeOK(sizeStatus, operation: operation)
+            return Data()
+        }
+        var output = Data(count: required)
+        let status = output.withUnsafeMutableBytes { bytes in
+            call(
+                pointer,
+                gm_mut_bytes(
+                    data: bytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: bytes.count
+                ),
+                &required
+            )
+        }
+        try requireRuntimeOK(status, operation: operation)
+        output.removeSubrange(required..<output.count)
+        return output
+    }
+}
+
+private func requireRuntimeOK(
+    _ status: gm_status,
+    operation: String
+) throws {
+    guard status == GM_OK else {
+        throw AppleCryptoError.runtimeFailure(
+            operation: operation,
+            status: String(cString: gm_status_string(status))
+        )
     }
 }
 

@@ -1,4 +1,4 @@
-#include <ghostmedia/win/aes_gcm_provider.h>
+#include <ghostmedia/runtime/aes_gcm_provider.h>
 
 #include <openssl/evp.h>
 
@@ -24,7 +24,7 @@ gm_status validate_common(gm_bytes key, gm_bytes nonce, gm_bytes aad, gm_bytes p
 }
 }
 
-namespace ghostmedia::win {
+namespace ghostmedia::runtime {
 
 gm_status aes256_gcm_encrypt(gm_bytes key, gm_bytes nonce, gm_bytes aad, gm_bytes plaintext,
                              std::vector<uint8_t> &ciphertext,
