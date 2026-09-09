@@ -2,7 +2,8 @@ add_executable(GhostMediaWinCryptoProviderTests
     crypto_provider_tests.cpp)
 
 target_link_libraries(GhostMediaWinCryptoProviderTests PRIVATE
-    GhostMediaWinSecurity)
+    GhostMediaWinSecurity
+    OpenSSL::Crypto)
 
 target_compile_features(GhostMediaWinCryptoProviderTests PRIVATE cxx_std_20)
 

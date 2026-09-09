@@ -140,14 +140,12 @@ Goal: prove authenticated transport bytes before real networking.
 ### Windows
 
 - [ ] Client identity key generation/storage.
-- [ ] Self-signed Ed25519 leaf certificate.
+- [x] Self-signed Ed25519 leaf certificate.
 - [ ] Local trust records and revocation handling.
 - [ ] TLS adapter enforcing leaf-only mutual authentication.
 - [ ] TLS exporter output supplied to the shared core.
-- [x] AES-256-GCM media/path provider adapter backed by Windows BCrypt.
-- [ ] Ed25519-capable TLS/certificate provider selected. The installed Windows SDK
-  headers do not expose CNG/NCrypt Ed25519 algorithm constants, so the conformant
-  v1 TLS adapter needs an external TLS/crypto provider or newer platform support.
+- [x] AES-256-GCM media/path provider adapter backed by OpenSSL 3.
+- [x] OpenSSL 3 selected for Ed25519/X.509 identity primitives.
 
 ### Apple output server
 

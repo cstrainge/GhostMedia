@@ -21,6 +21,7 @@
       "displayName": "Windows MSVC Debug",
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "binaryDir": "${sourceDir}/out/build/windows-msvc",
       "cacheVariables": {
         "GM_BUILD_TESTS": "ON",

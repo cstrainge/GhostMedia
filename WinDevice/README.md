@@ -14,12 +14,20 @@ starter for the future service host. The WaveRT driver project is intentionally
 not scaffolded yet; the protocol core and userspace vertical slice should build
 and pass tests before WDK driver work begins.
 
-`GhostMediaWinSecurity` under `security/` is the first Windows-side Phase 2
-adapter. It uses Windows BCrypt for AES-256-GCM and relies on the shared core for
-key, nonce, AAD, payload, tag, replay, and epoch validation. It does not implement
-the v1 Ed25519 TLS identity adapter yet; the installed Windows SDK headers in this
-environment do not expose CNG/NCrypt Ed25519 constants, so that adapter needs an
-external TLS/crypto provider choice or newer platform support.
+`GhostMediaWinSecurity` under `security/` is the Windows-side Phase 2 provider
+adapter. It uses OpenSSL 3 for AES-256-GCM and Ed25519/X.509 primitives while
+relying on the shared core for key, nonce, AAD, payload, tag, replay, epoch, TLS
+policy, and exporter-context validation. The generated in-memory identity uses the
+required self-signed Ed25519 leaf profile; protected persistent key storage and the
+live mutual-TLS transport adapter remain separate work.
+
+The Windows preset uses vcpkg manifest mode through `VCPKG_ROOT`. Visual Studio's
+bundled vcpkg is sufficient:
+
+```powershell
+$env:VCPKG_ROOT = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\vcpkg"
+cmake --preset windows-msvc
+```
 
 Phase 2 local smoke:
 

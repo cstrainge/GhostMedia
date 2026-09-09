@@ -1,3 +1,5 @@
+find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+
 add_subdirectory(security)
 add_subdirectory(service)
 add_subdirectory(tools/control_probe)
