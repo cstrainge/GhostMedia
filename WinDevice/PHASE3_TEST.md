@@ -36,6 +36,11 @@ Windows process binds UDP port `49152` by default. If it is unavailable, choose
 another free port with `-WindowsUDPPort`; that selected port is authenticated
 inside the TLS control session before the Apple harness accepts media.
 
+When mutual TLS rejects a peer, retain the two SPKI SHA-256 digests printed by
+the Windows fixture. They are public pins for its explicit test identities and
+allow the Apple-side fixture to compare its configured client and server pins
+without exposing private key material.
+
 ## Pass criteria
 
 Windows reports `mutual TLS 1.3 established`, `protected UDP path validated`,

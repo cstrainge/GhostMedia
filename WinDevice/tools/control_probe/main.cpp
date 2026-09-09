@@ -550,6 +550,17 @@ std::array<uint8_t, GM_SPKI_DIGEST_BYTES> identity_digest(const gm_runtime_ident
     return digest;
 }
 
+std::string hex_encode(const uint8_t *bytes, size_t size) {
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(size * 2u);
+    for (size_t index = 0u; index < size; ++index) {
+        result.push_back(digits[(bytes[index] >> 4u) & 0x0fu]);
+        result.push_back(digits[bytes[index] & 0x0fu]);
+    }
+    return result;
+}
+
 IdentityHandle phase3_test_identity(const std::array<uint8_t, 32> &private_key) {
     gm_runtime_identity *identity = nullptr;
     const gm_status status = gm_runtime_identity_renew_raw_ed25519(
@@ -709,6 +720,10 @@ void run_connect(const Options &options) {
         server_identity.emplace(phase3_test_identity(kPhase3ApplePrivateKey));
         client_digest = identity_digest(client_identity->get());
         server_digest = identity_digest(server_identity->get());
+        std::cout << "Phase 3 test client SPKI SHA-256: "
+                  << hex_encode(client_digest.data(), client_digest.size()) << "\n"
+                  << "Phase 3 expected server SPKI SHA-256: "
+                  << hex_encode(server_digest.data(), server_digest.size()) << "\n";
         gm_runtime_tls_session *tls = nullptr;
         gm_status status = gm_runtime_tls_client_create(
             socket_handle.get(), client_identity->get(),
