@@ -38,6 +38,16 @@ one connection, validates and answers `session.hello`, `transport.bind`, and
 `stream.open`, then exits. This mode is only for the first interoperability test;
 it is not a conformant replacement for the Phase 2 TLS transport.
 
+Run the Phase 3 secure command-line fixture instead when testing synthetic media:
+
+```sh
+xcrun swift run GhostMediaAppleHarness --listen 51837 --phase3-test
+```
+
+It performs pinned mutual TLS 1.3, exporter-derived AES-256-GCM path validation,
+and receives eight synthetic PCM packets into a deterministic discard sink. The
+paired Windows command is in [PHASE3_TEST.md](../WinDevice/PHASE3_TEST.md).
+
 The CMake-built shared core, runtime, and C/C++ ABI tests remain available with:
 
 ```sh

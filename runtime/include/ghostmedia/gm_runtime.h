@@ -10,6 +10,7 @@ extern "C" {
 typedef struct gm_runtime_identity gm_runtime_identity;
 typedef struct gm_runtime_tcp_socket gm_runtime_tcp_socket;
 typedef struct gm_runtime_tls_session gm_runtime_tls_session;
+typedef struct gm_runtime_udp_socket gm_runtime_udp_socket;
 
 gm_status gm_runtime_identity_generate(gm_runtime_identity **out_identity);
 gm_status gm_runtime_identity_load(gm_bytes private_key_pkcs8, gm_bytes certificate_der,
@@ -40,6 +41,7 @@ gm_status gm_runtime_aes256_gcm_encrypt(gm_bytes key, gm_bytes nonce, gm_bytes a
 gm_status gm_runtime_aes256_gcm_decrypt(gm_bytes key, gm_bytes nonce, gm_bytes aad,
                                        gm_bytes ciphertext, gm_bytes tag,
                                        gm_mut_bytes plaintext);
+gm_status gm_runtime_random_bytes(gm_mut_bytes output);
 
 gm_status gm_runtime_tls13_exporter_pair(const gm_runtime_identity *client_identity,
                                         const gm_runtime_identity *server_identity,
@@ -77,7 +79,25 @@ gm_status gm_runtime_tcp_receive(gm_runtime_tcp_socket *connection, gm_mut_bytes
                                 size_t *received);
 gm_status gm_runtime_tcp_receive_exact(gm_runtime_tcp_socket *connection, gm_mut_bytes output);
 gm_status gm_runtime_tcp_local_port(const gm_runtime_tcp_socket *socket, uint16_t *port);
+gm_status gm_runtime_tcp_peer_ipv4(const gm_runtime_tcp_socket *socket, char *host,
+                                   size_t host_capacity, uint16_t *port);
 void gm_runtime_tcp_socket_destroy(gm_runtime_tcp_socket *socket);
+
+/* IPv4-only datagram adapter used by the Phase 3 command-line slice. The
+ * caller supplies the candidate peer address from the authenticated control
+ * session and validates the returned source address/port before accepting a
+ * datagram as media. */
+gm_status gm_runtime_udp_bind_ipv4(uint16_t port, uint32_t timeout_ms,
+                                   gm_runtime_udp_socket **out_socket);
+gm_status gm_runtime_udp_send_to(gm_runtime_udp_socket *socket, const char *host,
+                                 uint16_t port, gm_bytes datagram);
+gm_status gm_runtime_udp_receive_from(gm_runtime_udp_socket *socket,
+                                      gm_mut_bytes output, size_t *received,
+                                      char *source_host, size_t source_host_capacity,
+                                      uint16_t *source_port);
+gm_status gm_runtime_udp_local_port(const gm_runtime_udp_socket *socket,
+                                    uint16_t *port);
+void gm_runtime_udp_socket_destroy(gm_runtime_udp_socket *socket);
 const char *gm_runtime_last_error(void);
 
 #ifdef __cplusplus

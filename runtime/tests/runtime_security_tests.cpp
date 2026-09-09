@@ -687,6 +687,74 @@ void test_tls13_over_runtime_tcp() {
     gm_runtime_tcp_socket_destroy(client_socket);
     gm_runtime_tcp_socket_destroy(listener);
 }
+
+void test_udp_loopback_and_randomness() {
+    gm_runtime_udp_socket *receiver = nullptr;
+    gm_runtime_udp_socket *sender = nullptr;
+    check_status(gm_runtime_udp_bind_ipv4(0u, 2000u, &receiver), GM_OK,
+                 "runtime UDP receiver binds");
+    check_status(gm_runtime_udp_bind_ipv4(0u, 2000u, &sender), GM_OK,
+                 "runtime UDP sender binds");
+    if (receiver == nullptr || sender == nullptr) {
+        gm_runtime_udp_socket_destroy(sender);
+        gm_runtime_udp_socket_destroy(receiver);
+        return;
+    }
+    uint16_t receiver_port = 0u;
+    uint16_t sender_port = 0u;
+    check_status(gm_runtime_udp_local_port(receiver, &receiver_port), GM_OK,
+                 "runtime UDP receiver reports its port");
+    check_status(gm_runtime_udp_local_port(sender, &sender_port), GM_OK,
+                 "runtime UDP sender reports its port");
+
+    gm_media_header header{};
+    header.struct_size = sizeof(header);
+    header.abi_version = GM_ABI_VERSION;
+    header.kind = GM_MEDIA_KIND_PATH_CHALLENGE;
+    for (size_t index = 0u; index < GM_SESSION_ID_BYTES; ++index) {
+        header.session_id[index] = static_cast<uint8_t>(index);
+    }
+    header.stream_id = 1u;
+    header.direction = GM_MEDIA_DIRECTION_WIN_TO_APPLE;
+    header.key_epoch = 1u;
+    header.sequence = 1u;
+    header.payload_length = 12u;
+    std::array<uint8_t, GM_MEDIA_MIN_DATAGRAM_BYTES> datagram{};
+    size_t header_size = 0u;
+    check_status(gm_media_encode_header(
+                     &header,
+                     gm_mut_bytes{datagram.data(), GM_MEDIA_HEADER_BYTES},
+                     &header_size),
+                 GM_OK,
+                 "runtime UDP test encodes a valid media header");
+    check(header_size == GM_MEDIA_HEADER_BYTES, "runtime UDP test header has fixed size");
+    check_status(gm_runtime_random_bytes(
+                     gm_mut_bytes{datagram.data() + GM_MEDIA_HEADER_BYTES, 12u}),
+                 GM_OK,
+                 "runtime CSPRNG produces a path challenge");
+    check_status(gm_runtime_udp_send_to(
+                     sender, "127.0.0.1", receiver_port,
+                     gm_bytes{datagram.data(), datagram.size()}),
+                 GM_OK,
+                 "runtime UDP sends a complete datagram");
+
+    std::array<uint8_t, GM_MEDIA_MAX_DATAGRAM_BYTES> received{};
+    std::array<char, 64> source_host{};
+    uint16_t source_port = 0u;
+    size_t received_size = 0u;
+    check_status(gm_runtime_udp_receive_from(
+                     receiver, gm_mut_bytes{received.data(), received.size()}, &received_size,
+                     source_host.data(), source_host.size(), &source_port),
+                 GM_OK,
+                 "runtime UDP receives a complete datagram");
+    check(received_size == datagram.size() &&
+              std::memcmp(received.data(), datagram.data(), datagram.size()) == 0,
+          "runtime UDP loopback preserves media datagram bytes");
+    check(std::strcmp(source_host.data(), "127.0.0.1") == 0 && source_port == sender_port,
+          "runtime UDP reports the bound source tuple");
+    gm_runtime_udp_socket_destroy(sender);
+    gm_runtime_udp_socket_destroy(receiver);
+}
 }
 
 int main() {
@@ -697,6 +765,7 @@ int main() {
     test_tcp_loopback();
     test_tcp_accept_timeout();
     test_tls13_over_runtime_tcp();
+    test_udp_loopback_and_randomness();
 
     if (failures != 0) {
         std::cerr << failures << " failure(s)\n";

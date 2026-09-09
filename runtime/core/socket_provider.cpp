@@ -36,6 +36,11 @@ struct gm_runtime_tcp_socket {
     uint32_t default_timeout_ms = 0u;
 };
 
+struct gm_runtime_udp_socket {
+    NativeSocket value = kInvalidSocket;
+    uint32_t default_timeout_ms = 0u;
+};
+
 namespace {
 thread_local std::string last_error;
 
@@ -190,6 +195,23 @@ gm_status make_handle(
     }
     handle->value = socket;
     handle->opened_at = std::chrono::steady_clock::now();
+    handle->default_timeout_ms = timeout_ms;
+    *output = handle.release();
+    return GM_OK;
+}
+
+gm_status make_udp_handle(
+    NativeSocket socket,
+    uint32_t timeout_ms,
+    gm_runtime_udp_socket **output) {
+    auto handle = std::unique_ptr<gm_runtime_udp_socket>(
+        new (std::nothrow) gm_runtime_udp_socket());
+    if (!handle) {
+        close_socket(socket);
+        last_error = "UDP socket handle allocation failed";
+        return GM_INTERNAL;
+    }
+    handle->value = socket;
     handle->default_timeout_ms = timeout_ms;
     *output = handle.release();
     return GM_OK;
@@ -538,7 +560,182 @@ gm_status gm_runtime_tcp_local_port(const gm_runtime_tcp_socket *socket_handle,
     return GM_OK;
 }
 
+gm_status gm_runtime_tcp_peer_ipv4(const gm_runtime_tcp_socket *socket_handle,
+                                   char *host, size_t host_capacity,
+                                   uint16_t *port) {
+    if (socket_handle == nullptr || socket_handle->value == kInvalidSocket ||
+        host == nullptr || host_capacity < INET_ADDRSTRLEN || port == nullptr) {
+        return GM_BAD_ARGUMENT;
+    }
+    host[0] = '\0';
+    *port = 0u;
+    sockaddr_in address{};
+#ifdef _WIN32
+    int address_size = sizeof(address);
+#else
+    socklen_t address_size = sizeof(address);
+#endif
+    if (getpeername(socket_handle->value, reinterpret_cast<sockaddr *>(&address), &address_size) != 0 ||
+        address.sin_family != AF_INET ||
+        inet_ntop(AF_INET, &address.sin_addr, host,
+                  static_cast<socklen_t>(host_capacity)) == nullptr) {
+        set_error("getpeername", socket_error());
+        return GM_INTERNAL;
+    }
+    *port = ntohs(address.sin_port);
+    return GM_OK;
+}
+
 void gm_runtime_tcp_socket_destroy(gm_runtime_tcp_socket *socket_handle) {
+    if (socket_handle != nullptr) {
+        close_socket(socket_handle->value);
+        socket_handle->value = kInvalidSocket;
+        delete socket_handle;
+    }
+}
+
+gm_status gm_runtime_udp_bind_ipv4(uint16_t port, uint32_t timeout_ms,
+                                   gm_runtime_udp_socket **out_socket) {
+    if (timeout_ms == 0u || out_socket == nullptr) {
+        return GM_BAD_ARGUMENT;
+    }
+    *out_socket = nullptr;
+    if (!ensure_socket_runtime()) {
+        last_error = "socket runtime initialization failed";
+        return GM_INTERNAL;
+    }
+    NativeSocket socket_value = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_value == kInvalidSocket) {
+        set_error("UDP socket", socket_error());
+        return GM_INTERNAL;
+    }
+    int reuse_address = 1;
+    if (setsockopt(
+            socket_value,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+#ifdef _WIN32
+            reinterpret_cast<const char *>(&reuse_address),
+#else
+            &reuse_address,
+#endif
+            sizeof(reuse_address)) != 0 ||
+        !set_timeouts(socket_value, timeout_ms)) {
+        set_error("UDP setsockopt", socket_error());
+        close_socket(socket_value);
+        return GM_INTERNAL;
+    }
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(socket_value, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
+        set_error("UDP bind", socket_error());
+        close_socket(socket_value);
+        return GM_INTERNAL;
+    }
+    return make_udp_handle(socket_value, timeout_ms, out_socket);
+}
+
+gm_status gm_runtime_udp_send_to(gm_runtime_udp_socket *socket_handle, const char *host,
+                                 uint16_t port, gm_bytes datagram) {
+    if (socket_handle == nullptr || socket_handle->value == kInvalidSocket ||
+        host == nullptr || host[0] == '\0' || port == 0u || datagram.data == nullptr ||
+        datagram.size < GM_MEDIA_MIN_DATAGRAM_BYTES || datagram.size > GM_MEDIA_MAX_DATAGRAM_BYTES) {
+        return GM_BAD_ARGUMENT;
+    }
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    addrinfo *addresses = nullptr;
+    const std::string port_text = std::to_string(port);
+    if (getaddrinfo(host, port_text.c_str(), &hints, &addresses) != 0 || addresses == nullptr) {
+        set_error("UDP getaddrinfo", socket_error());
+        if (addresses != nullptr) {
+            freeaddrinfo(addresses);
+        }
+        return GM_INTERNAL;
+    }
+#ifdef _WIN32
+    const int size = static_cast<int>(datagram.size);
+    const int sent = sendto(socket_handle->value, reinterpret_cast<const char *>(datagram.data),
+                            size, 0, addresses->ai_addr, static_cast<int>(addresses->ai_addrlen));
+    const bool success = sent == size;
+#else
+    const ssize_t sent = sendto(socket_handle->value, datagram.data, datagram.size, 0,
+                                addresses->ai_addr, static_cast<socklen_t>(addresses->ai_addrlen));
+    const bool success = sent == static_cast<ssize_t>(datagram.size);
+#endif
+    freeaddrinfo(addresses);
+    if (!success) {
+        set_error("UDP sendto", socket_error());
+        return GM_INTERNAL;
+    }
+    return GM_OK;
+}
+
+gm_status gm_runtime_udp_receive_from(gm_runtime_udp_socket *socket_handle,
+                                      gm_mut_bytes output, size_t *received,
+                                      char *source_host, size_t source_host_capacity,
+                                      uint16_t *source_port) {
+    if (socket_handle == nullptr || socket_handle->value == kInvalidSocket ||
+        output.data == nullptr || output.size < GM_MEDIA_MIN_DATAGRAM_BYTES ||
+        output.size > GM_MEDIA_MAX_DATAGRAM_BYTES || received == nullptr ||
+        source_host == nullptr || source_host_capacity < INET_ADDRSTRLEN || source_port == nullptr) {
+        return GM_BAD_ARGUMENT;
+    }
+    *received = 0u;
+    source_host[0] = '\0';
+    *source_port = 0u;
+    sockaddr_in source{};
+#ifdef _WIN32
+    int source_size = sizeof(source);
+    const int count = recvfrom(socket_handle->value, reinterpret_cast<char *>(output.data),
+                               static_cast<int>(output.size), 0,
+                               reinterpret_cast<sockaddr *>(&source), &source_size);
+    if (count == SOCKET_ERROR) {
+#else
+    socklen_t source_size = sizeof(source);
+    const ssize_t count = recvfrom(socket_handle->value, output.data, output.size, 0,
+                                   reinterpret_cast<sockaddr *>(&source), &source_size);
+    if (count < 0) {
+#endif
+        set_error("UDP recvfrom", socket_error());
+        return GM_INTERNAL;
+    }
+    if (source.sin_family != AF_INET ||
+        inet_ntop(AF_INET, &source.sin_addr, source_host,
+                  static_cast<socklen_t>(source_host_capacity)) == nullptr) {
+        set_error("UDP source address", socket_error());
+        return GM_INTERNAL;
+    }
+    *received = static_cast<size_t>(count);
+    *source_port = ntohs(source.sin_port);
+    return GM_OK;
+}
+
+gm_status gm_runtime_udp_local_port(const gm_runtime_udp_socket *socket_handle,
+                                    uint16_t *port) {
+    if (socket_handle == nullptr || socket_handle->value == kInvalidSocket || port == nullptr) {
+        return GM_BAD_ARGUMENT;
+    }
+    sockaddr_in address{};
+#ifdef _WIN32
+    int address_size = sizeof(address);
+#else
+    socklen_t address_size = sizeof(address);
+#endif
+    if (getsockname(socket_handle->value, reinterpret_cast<sockaddr *>(&address), &address_size) != 0 ||
+        address.sin_family != AF_INET) {
+        set_error("UDP getsockname", socket_error());
+        return GM_INTERNAL;
+    }
+    *port = ntohs(address.sin_port);
+    return GM_OK;
+}
+
+void gm_runtime_udp_socket_destroy(gm_runtime_udp_socket *socket_handle) {
     if (socket_handle != nullptr) {
         close_socket(socket_handle->value);
         socket_handle->value = kInvalidSocket;

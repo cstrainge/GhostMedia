@@ -68,12 +68,16 @@ audio units, or protocol state.
 and injects them into shared layers. The current target contains the app shell and
 shared-core version probe.
 
-`GhostMediaAppleHarness` is the Phase 1/2 integration executable. It feeds
+`GhostMediaAppleHarness` is the Phase 1/2 integration executable and Phase 3
+command-line fixture. It feeds
 deterministic control and media fixtures through `GhostMediaProtocolBridge` and
 prints the resulting typed values. Its `--phase2-vectors` mode checks identity,
 exporter-context, AES-GCM, and an in-memory pinned mutual-TLS 1.3 handshake. Its explicit
 `--listen ... --allow-plaintext` mode provides the one-shot TCP endpoint required
-by the first Windows probe. It has no live TLS, DNS-SD, UDP media, or audio path.
+by the first Windows probe. Its explicit `--listen ... --phase3-test` mode adds
+pinned mutual TLS, exporter-derived AES-GCM UDP path validation, and an ordered
+synthetic PCM discard sink using test-only identities. It has no DNS-SD or Apple
+audio-output path.
 
 ## Planned adapter targets
 

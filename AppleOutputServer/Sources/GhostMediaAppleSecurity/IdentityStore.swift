@@ -75,6 +75,38 @@ public struct AppleOutputIdentity: Sendable {
         )
     }
 
+    /// Creates a deterministic identity only for the explicit Phase 3 command-line
+    /// fixture. Production callers must use AppleIdentityManager instead.
+    public static func phase3TestIdentity(
+        privateKeyRaw: Data,
+        serverID: UUID = UUID()
+    ) throws -> AppleOutputIdentity {
+        guard privateKeyRaw.count == 32 else {
+            throw AppleCryptoError.invalidKeyLength(privateKeyRaw.count)
+        }
+        var pointer: OpaquePointer?
+        let status = privateKeyRaw.withUnsafeBytes { keyBytes in
+            gm_runtime_identity_renew_raw_ed25519(
+                gm_bytes(
+                    data: keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: keyBytes.count
+                ),
+                &pointer
+            )
+        }
+        try requireRuntimeOK(status, operation: "gm_runtime_identity_renew_raw_ed25519")
+        guard let pointer else {
+            throw AppleCryptoError.runtimeFailure(
+                operation: "gm_runtime_identity_renew_raw_ed25519",
+                status: "missing identity"
+            )
+        }
+        return try AppleOutputIdentity(
+            serverID: serverID,
+            runtimeIdentity: RuntimeIdentityHandle(pointer: pointer)
+        )
+    }
+
     public func signature(for data: Data) throws -> Data {
         try data.withUnsafeBytes { messageBytes in
             try runtimeIdentity.copyVariableOutput(
@@ -340,6 +372,102 @@ public enum AppleRuntimeTLS {
             operation: "gm_runtime_tls13_exporter_pair"
         )
         return (clientOutput, serverOutput)
+    }
+}
+
+public final class AppleRuntimeTLSSession: @unchecked Sendable {
+    private let pointer: OpaquePointer
+
+    private init(pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+
+    deinit {
+        gm_runtime_tls_session_destroy(pointer)
+    }
+
+    public static func accept(
+        connection: OpaquePointer,
+        identity: AppleOutputIdentity,
+        expectedClientSPKIDigest: Data
+    ) throws -> AppleRuntimeTLSSession {
+        var pointer: OpaquePointer?
+        let status = expectedClientSPKIDigest.withUnsafeBytes { digestBytes in
+            gm_runtime_tls_server_create(
+                connection,
+                identity.runtimeIdentity.pointer,
+                gm_bytes(
+                    data: digestBytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: digestBytes.count
+                ),
+                &pointer
+            )
+        }
+        try requireRuntimeOK(status, operation: "gm_runtime_tls_server_create")
+        guard let pointer else {
+            throw AppleCryptoError.runtimeFailure(
+                operation: "gm_runtime_tls_server_create",
+                status: "missing session"
+            )
+        }
+        return AppleRuntimeTLSSession(pointer: pointer)
+    }
+
+    public func handshake() throws {
+        try requireRuntimeOK(
+            gm_runtime_tls_handshake(pointer),
+            operation: "gm_runtime_tls_handshake"
+        )
+    }
+
+    public func sendAll(_ data: Data) throws {
+        let status = data.withUnsafeBytes { bytes in
+            gm_runtime_tls_send_all(
+                pointer,
+                gm_bytes(
+                    data: bytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: bytes.count
+                )
+            )
+        }
+        try requireRuntimeOK(status, operation: "gm_runtime_tls_send_all")
+    }
+
+    public func receive(into output: inout [UInt8]) throws -> Int {
+        var received = 0
+        let status = output.withUnsafeMutableBytes { bytes in
+            gm_runtime_tls_receive(
+                pointer,
+                gm_mut_bytes(
+                    data: bytes.bindMemory(to: UInt8.self).baseAddress,
+                    size: bytes.count
+                ),
+                &received
+            )
+        }
+        try requireRuntimeOK(status, operation: "gm_runtime_tls_receive")
+        return received
+    }
+
+    public func exporter(context: Data) throws -> Data {
+        var output = Data(count: ProtocolCore.tlsExporterOutputLength)
+        let status = context.withUnsafeBytes { contextBytes in
+            output.withUnsafeMutableBytes { outputBytes in
+                gm_runtime_tls_export(
+                    pointer,
+                    gm_bytes(
+                        data: contextBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: contextBytes.count
+                    ),
+                    gm_mut_bytes(
+                        data: outputBytes.bindMemory(to: UInt8.self).baseAddress,
+                        size: outputBytes.count
+                    )
+                )
+            }
+        }
+        try requireRuntimeOK(status, operation: "gm_runtime_tls_export")
+        return output
     }
 }
 

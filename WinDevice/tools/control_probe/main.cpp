@@ -2,25 +2,44 @@
 #include <ghostmedia/gm_runtime.h>
 
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
 constexpr uint16_t kDefaultUdpPort = 49152u;
 constexpr uint16_t kDefaultPlayoutTargetMs = 30u;
 constexpr uint32_t kDefaultReceiveTimeoutMs = 5000u;
+constexpr uint32_t kPhase3PacketCount = 8u;
+
+constexpr std::array<uint8_t, 32> kPhase3WindowsPrivateKey{
+    0x01, 0x72, 0x65, 0x9f, 0x44, 0x3a, 0x8c, 0xd1,
+    0x20, 0x6e, 0x55, 0x11, 0x93, 0x27, 0xba, 0x6f,
+    0x32, 0xe8, 0x09, 0x4c, 0xa1, 0x7d, 0xf0, 0x58,
+    0x6b, 0xc3, 0x16, 0x84, 0x2d, 0x97, 0x3e, 0xfa,
+};
+constexpr std::array<uint8_t, 32> kPhase3ApplePrivateKey{
+    0xa2, 0x8b, 0x45, 0x19, 0xde, 0x70, 0x36, 0xc4,
+    0x5f, 0x0d, 0x91, 0x2a, 0x68, 0xb7, 0xe3, 0x54,
+    0x9c, 0x21, 0xf6, 0x80, 0x3b, 0xad, 0x47, 0xd2,
+    0x75, 0x0e, 0x6a, 0x98, 0xc5, 0x14, 0xbf, 0x62,
+};
 
 struct Options {
     bool dry_run = false;
     bool show_help = false;
     bool allow_plaintext = false;
+    bool phase3_test = false;
     std::string host;
     uint16_t port = 0u;
     uint16_t udp_port = kDefaultUdpPort;
@@ -78,6 +97,47 @@ private:
     gm_runtime_tcp_socket *socket_handle_;
 };
 
+class IdentityHandle {
+public:
+    explicit IdentityHandle(gm_runtime_identity *identity = nullptr) : identity_(identity) {}
+    IdentityHandle(const IdentityHandle &) = delete;
+    IdentityHandle &operator=(const IdentityHandle &) = delete;
+    IdentityHandle(IdentityHandle &&other) noexcept : identity_(other.identity_) { other.identity_ = nullptr; }
+    ~IdentityHandle() { if (identity_ != nullptr) { gm_runtime_identity_destroy(identity_); } }
+    gm_runtime_identity *get() const { return identity_; }
+private:
+    gm_runtime_identity *identity_;
+};
+
+class TlsHandle {
+public:
+    explicit TlsHandle(gm_runtime_tls_session *session = nullptr) : session_(session) {}
+    TlsHandle(const TlsHandle &) = delete;
+    TlsHandle &operator=(const TlsHandle &) = delete;
+    TlsHandle(TlsHandle &&other) noexcept : session_(other.session_) { other.session_ = nullptr; }
+    ~TlsHandle() { if (session_ != nullptr) { gm_runtime_tls_session_destroy(session_); } }
+    gm_runtime_tls_session *get() const { return session_; }
+private:
+    gm_runtime_tls_session *session_;
+};
+
+class UdpHandle {
+public:
+    explicit UdpHandle(gm_runtime_udp_socket *socket = nullptr) : socket_(socket) {}
+    UdpHandle(const UdpHandle &) = delete;
+    UdpHandle &operator=(const UdpHandle &) = delete;
+    UdpHandle(UdpHandle &&other) noexcept : socket_(other.socket_) { other.socket_ = nullptr; }
+    ~UdpHandle() { if (socket_ != nullptr) { gm_runtime_udp_socket_destroy(socket_); } }
+    gm_runtime_udp_socket *get() const { return socket_; }
+private:
+    gm_runtime_udp_socket *socket_;
+};
+
+struct ControlConnection {
+    gm_runtime_tcp_socket *socket = nullptr;
+    gm_runtime_tls_session *tls = nullptr;
+};
+
 [[noreturn]] void fail_with_usage(const std::string &message);
 
 void print_usage(std::ostream &output) {
@@ -86,6 +146,8 @@ void print_usage(std::ostream &output) {
            << "      Validate the scripted Windows-side hello/bind/open flow locally.\n"
            << "  --connect <host> <port> --allow-plaintext [options]\n"
            << "      Run the same framed-control flow against a Mac CLI harness.\n\n"
+           << "  --connect <host> <port> --phase3-test [options]\n"
+           << "      Run the pinned-TLS and protected-UDP Phase 3 test fixture.\n\n"
            << "Options:\n"
            << "  --udp-port <1..65535>             Windows prebound UDP port fixture.\n"
            << "  --playout-target-ms <15..120>     stream.open playout target.\n"
@@ -128,6 +190,8 @@ Options parse_options(int argument_count, char **arguments) {
             options.dry_run = true;
         } else if (argument == "--allow-plaintext") {
             options.allow_plaintext = true;
+        } else if (argument == "--phase3-test") {
+            options.phase3_test = true;
         } else if (argument == "--connect") {
             if (argument_index + 2 >= argument_count) {
                 fail_with_usage("--connect requires <host> <port>");
@@ -167,8 +231,11 @@ Options parse_options(int argument_count, char **arguments) {
     if (options.dry_run && !options.host.empty()) {
         fail_with_usage("choose only one of --dry-run or --connect");
     }
-    if (!options.host.empty() && !options.allow_plaintext) {
+    if (!options.host.empty() && !options.allow_plaintext && !options.phase3_test) {
         fail_with_usage("--connect requires --allow-plaintext for this pre-TLS probe");
+    }
+    if (options.allow_plaintext && options.phase3_test) {
+        fail_with_usage("choose only one of --allow-plaintext or --phase3-test");
     }
     if (options.client_name.empty() || options.client_name.size() > GM_CONTROL_CLIENT_NAME_MAX_BYTES) {
         fail_with_usage("--client-name must be 1..128 bytes");
@@ -242,6 +309,11 @@ std::string stream_open_json(uint16_t playout_target_ms) {
            "\"profile\":{\"codec\":\"pcm_s16le\",\"sample_rate_hz\":48000,\"channels\":2,"
            "\"channel_layout\":\"stereo\",\"frames_per_packet\":240},\"playout_target_ms\":" +
            std::to_string(playout_target_ms) + "}";
+}
+
+std::string stream_start_json(uint32_t stream_id, uint64_t first_media_timestamp) {
+    return "{\"v\":1,\"id\":4,\"type\":\"stream.start\",\"stream_id\":" + std::to_string(stream_id) + ",\"first_media_timestamp\":\"" +
+           std::to_string(first_media_timestamp) + "\"}";
 }
 
 std::string simulated_hello_result_json() {
@@ -366,31 +438,33 @@ SocketHandle connect_tcp(const std::string &host, uint16_t port) {
     return SocketHandle(connection);
 }
 
-void send_all(gm_runtime_tcp_socket *socket_handle, const uint8_t *data, size_t size) {
-    const gm_status status = gm_runtime_tcp_send_all(socket_handle, gm_bytes{data, size});
+void send_all(const ControlConnection &connection, const uint8_t *data, size_t size) {
+    const gm_status status = connection.tls != nullptr
+        ? gm_runtime_tls_send_all(connection.tls, gm_bytes{data, size})
+        : gm_runtime_tcp_send_all(connection.socket, gm_bytes{data, size});
     if (status != GM_OK) {
         throw std::runtime_error(runtime_error("send", status));
     }
 }
 
-void recv_all(gm_runtime_tcp_socket *socket_handle, uint8_t *data, size_t size) {
-    const gm_status status = gm_runtime_tcp_receive_exact(
-        socket_handle,
-        gm_mut_bytes{data, size});
+void recv_all(const ControlConnection &connection, uint8_t *data, size_t size) {
+    const gm_status status = connection.tls != nullptr
+        ? gm_runtime_tls_receive_exact(connection.tls, gm_mut_bytes{data, size})
+        : gm_runtime_tcp_receive_exact(connection.socket, gm_mut_bytes{data, size});
     if (status != GM_OK) {
         throw std::runtime_error(runtime_error("receive", status));
     }
 }
 
-void send_control_json(gm_runtime_tcp_socket *socket_handle, const std::string &json, const std::string &label) {
+void send_control_json(const ControlConnection &connection, const std::string &json, const std::string &label) {
     const std::vector<uint8_t> frame = encode_control_frame(json, label);
-    send_all(socket_handle, frame.data(), frame.size());
+    send_all(connection, frame.data(), frame.size());
     std::cout << "sent " << label << " (" << json.size() << " JSON bytes)\n";
 }
 
-ReceivedMessage receive_control_message(gm_runtime_tcp_socket *socket_handle) {
+ReceivedMessage receive_control_message(const ControlConnection &connection) {
     std::array<uint8_t, GM_CONTROL_FRAME_HEADER_BYTES> header{};
-    recv_all(socket_handle, header.data(), header.size());
+    recv_all(connection, header.data(), header.size());
 
     gm_control_frame_info frame_info{};
     frame_info.struct_size = sizeof(frame_info);
@@ -401,7 +475,7 @@ ReceivedMessage receive_control_message(gm_runtime_tcp_socket *socket_handle) {
 
     std::vector<uint8_t> frame(frame_info.frame_size);
     std::memcpy(frame.data(), header.data(), header.size());
-    recv_all(socket_handle, frame.data() + header.size(), frame.size() - header.size());
+    recv_all(connection, frame.data() + header.size(), frame.size() - header.size());
 
     frame_info = gm_control_frame_info{};
     frame_info.struct_size = sizeof(frame_info);
@@ -417,11 +491,11 @@ ReceivedMessage receive_control_message(gm_runtime_tcp_socket *socket_handle) {
 }
 
 gm_control_message_info receive_result_for_id(
-    gm_runtime_tcp_socket *socket_handle,
+    const ControlConnection &connection,
     uint32_t expected_id,
     const std::string &label) {
     for (uint32_t frame_count = 0u; frame_count < 8u; ++frame_count) {
-        ReceivedMessage received = receive_control_message(socket_handle);
+        ReceivedMessage received = receive_control_message(connection);
         if (received.info.kind == GM_CONTROL_RESPONSE_RESULT && received.info.id == expected_id) {
             std::cout << "received " << label << "\n";
             return received.info;
@@ -466,13 +540,199 @@ void run_dry_run(const Options &options) {
               << "  path headers: WIN_TO_APPLE challenge and APPLE_TO_WIN response validated\n";
 }
 
+std::array<uint8_t, GM_SPKI_DIGEST_BYTES> identity_digest(const gm_runtime_identity *identity) {
+    std::array<uint8_t, GM_SPKI_DIGEST_BYTES> digest{};
+    const gm_status status = gm_runtime_identity_spki_sha256(
+        identity, gm_mut_bytes{digest.data(), digest.size()});
+    if (status != GM_OK) {
+        throw std::runtime_error(runtime_error("identity digest", status));
+    }
+    return digest;
+}
+
+IdentityHandle phase3_test_identity(const std::array<uint8_t, 32> &private_key) {
+    gm_runtime_identity *identity = nullptr;
+    const gm_status status = gm_runtime_identity_renew_raw_ed25519(
+        gm_bytes{private_key.data(), private_key.size()}, &identity);
+    if (status != GM_OK || identity == nullptr) {
+        throw std::runtime_error(runtime_error("Phase 3 test identity", status));
+    }
+    return IdentityHandle(identity);
+}
+
+gm_directional_keys derive_phase3_keys(
+    gm_runtime_tls_session *tls,
+    const std::array<uint8_t, GM_SESSION_ID_BYTES> &session_id,
+    uint32_t stream_id,
+    uint32_t direction,
+    uint32_t key_epoch,
+    const std::array<uint8_t, GM_SPKI_DIGEST_BYTES> &sender_digest,
+    const std::array<uint8_t, GM_SPKI_DIGEST_BYTES> &receiver_digest) {
+    gm_crypto_exporter_context_input input{};
+    input.struct_size = sizeof(input);
+    input.abi_version = GM_ABI_VERSION;
+    input.stream_id = stream_id;
+    input.direction = direction;
+    input.key_epoch = key_epoch;
+    std::memcpy(input.session_id, session_id.data(), session_id.size());
+    std::memcpy(input.sender_spki_digest, sender_digest.data(), sender_digest.size());
+    std::memcpy(input.receiver_spki_digest, receiver_digest.data(), receiver_digest.size());
+
+    std::array<uint8_t, GM_TLS_EXPORTER_CONTEXT_BYTES> context{};
+    size_t context_size = 0u;
+    gm_status status = gm_crypto_build_exporter_context(
+        &input, gm_mut_bytes{context.data(), context.size()}, &context_size);
+    if (status != GM_OK || context_size != context.size()) {
+        throw std::runtime_error("failed to build Phase 3 TLS exporter context");
+    }
+    std::array<uint8_t, GM_TLS_EXPORTER_OUTPUT_BYTES> output{};
+    status = gm_runtime_tls_export(
+        tls, gm_bytes{context.data(), context.size()}, gm_mut_bytes{output.data(), output.size()});
+    if (status != GM_OK) {
+        throw std::runtime_error(runtime_error("TLS exporter", status));
+    }
+    gm_directional_keys keys{};
+    keys.struct_size = sizeof(keys);
+    status = gm_crypto_split_exporter_output(gm_bytes{output.data(), output.size()}, &keys);
+    if (status != GM_OK) {
+        throw std::runtime_error("failed to split Phase 3 TLS exporter output");
+    }
+    return keys;
+}
+
+std::vector<uint8_t> seal_media_datagram(
+    const std::array<uint8_t, GM_SESSION_ID_BYTES> &session_id,
+    uint32_t stream_id,
+    uint32_t kind,
+    uint32_t direction,
+    uint32_t key_epoch,
+    uint64_t sequence,
+    uint64_t media_timestamp,
+    const std::vector<uint8_t> &payload,
+    const uint8_t *key) {
+    gm_media_header header{};
+    header.struct_size = sizeof(header);
+    header.abi_version = GM_ABI_VERSION;
+    header.kind = kind;
+    std::memcpy(header.session_id, session_id.data(), session_id.size());
+    header.stream_id = stream_id;
+    header.direction = direction;
+    header.key_epoch = key_epoch;
+    header.sequence = sequence;
+    header.media_timestamp = media_timestamp;
+    header.payload_length = static_cast<uint32_t>(payload.size());
+
+    std::vector<uint8_t> datagram(GM_MEDIA_HEADER_BYTES + payload.size() + GM_MEDIA_TAG_BYTES);
+    size_t header_size = 0u;
+    gm_status status = gm_media_encode_header(
+        &header, gm_mut_bytes{datagram.data(), GM_MEDIA_HEADER_BYTES}, &header_size);
+    if (status != GM_OK || header_size != GM_MEDIA_HEADER_BYTES) {
+        throw std::runtime_error("failed to encode protected media header");
+    }
+    std::array<uint8_t, GM_MEDIA_NONCE_BYTES> nonce{};
+    status = gm_media_build_nonce(key_epoch, sequence, gm_mut_bytes{nonce.data(), nonce.size()});
+    if (status != GM_OK) {
+        throw std::runtime_error("failed to build media nonce");
+    }
+    status = gm_runtime_aes256_gcm_encrypt(
+        gm_bytes{key, GM_CRYPTO_KEY_BYTES}, gm_bytes{nonce.data(), nonce.size()},
+        gm_bytes{datagram.data(), GM_MEDIA_HEADER_BYTES}, gm_bytes{payload.data(), payload.size()},
+        gm_mut_bytes{datagram.data() + GM_MEDIA_HEADER_BYTES, payload.size()},
+        gm_mut_bytes{datagram.data() + GM_MEDIA_HEADER_BYTES + payload.size(), GM_MEDIA_TAG_BYTES});
+    if (status != GM_OK) {
+        throw std::runtime_error(runtime_error("AES-GCM encrypt", status));
+    }
+    return datagram;
+}
+
+gm_media_header open_media_datagram(
+    const std::vector<uint8_t> &datagram,
+    const uint8_t *key,
+    std::vector<uint8_t> &plaintext) {
+    gm_media_header header{};
+    header.struct_size = sizeof(header);
+    gm_status status = gm_media_decode_header(gm_bytes{datagram.data(), datagram.size()}, &header);
+    if (status != GM_OK) {
+        throw std::runtime_error("received malformed protected UDP datagram");
+    }
+    std::array<uint8_t, GM_MEDIA_NONCE_BYTES> nonce{};
+    status = gm_media_build_nonce(header.key_epoch, header.sequence,
+                                  gm_mut_bytes{nonce.data(), nonce.size()});
+    if (status != GM_OK) {
+        throw std::runtime_error("failed to build received media nonce");
+    }
+    plaintext.resize(header.payload_length);
+    status = gm_runtime_aes256_gcm_decrypt(
+        gm_bytes{key, GM_CRYPTO_KEY_BYTES}, gm_bytes{nonce.data(), nonce.size()},
+        gm_bytes{datagram.data(), GM_MEDIA_HEADER_BYTES},
+        gm_bytes{datagram.data() + GM_MEDIA_HEADER_BYTES, header.payload_length},
+        gm_bytes{datagram.data() + GM_MEDIA_HEADER_BYTES + header.payload_length, GM_MEDIA_TAG_BYTES},
+        gm_mut_bytes{plaintext.data(), plaintext.size()});
+    if (status != GM_OK) {
+        throw std::runtime_error("received UDP datagram did not authenticate");
+    }
+    return header;
+}
+
+std::vector<uint8_t> synthetic_pcm_packet(uint64_t packet_index) {
+    std::vector<uint8_t> pcm(GM_AUDIO_PCM_S16LE_PAYLOAD_BYTES);
+    constexpr double kPi = 3.14159265358979323846;
+    for (size_t frame = 0; frame < 240u; ++frame) {
+        const double phase = (static_cast<double>(packet_index * 240u + frame) * 440.0 * 2.0 * kPi) / 48000.0;
+        const int16_t sample = static_cast<int16_t>(std::sin(phase) * 12000.0);
+        const size_t offset = frame * 4u;
+        pcm[offset] = static_cast<uint8_t>(sample & 0xff);
+        pcm[offset + 1u] = static_cast<uint8_t>((static_cast<uint16_t>(sample) >> 8u) & 0xffu);
+        pcm[offset + 2u] = pcm[offset];
+        pcm[offset + 3u] = pcm[offset + 1u];
+    }
+    return pcm;
+}
+
 void run_connect(const Options &options) {
-    std::cout << "warning: using pre-TLS framed TCP for first interop only; this is not v1-conformant transport\n";
+    if (options.phase3_test) {
+        std::cout << "Phase 3 test mode: pinned mutual TLS and protected UDP are enabled\n";
+    } else {
+        std::cout << "warning: using pre-TLS framed TCP for first interop only; this is not v1-conformant transport\n";
+    }
     SocketHandle socket_handle = connect_tcp(options.host, options.port);
     std::cout << "connected to " << options.host << ':' << options.port << "\n";
 
-    send_control_json(socket_handle.get(), session_hello_json(options), "session.hello");
-    const gm_control_message_info hello_result = receive_result_for_id(socket_handle.get(), 1u, "session.hello result");
+    std::optional<IdentityHandle> client_identity;
+    std::optional<IdentityHandle> server_identity;
+    std::optional<TlsHandle> tls_handle;
+    std::optional<UdpHandle> udp_handle;
+    std::array<uint8_t, GM_SPKI_DIGEST_BYTES> client_digest{};
+    std::array<uint8_t, GM_SPKI_DIGEST_BYTES> server_digest{};
+    if (options.phase3_test) {
+        client_identity.emplace(phase3_test_identity(kPhase3WindowsPrivateKey));
+        server_identity.emplace(phase3_test_identity(kPhase3ApplePrivateKey));
+        client_digest = identity_digest(client_identity->get());
+        server_digest = identity_digest(server_identity->get());
+        gm_runtime_tls_session *tls = nullptr;
+        gm_status status = gm_runtime_tls_client_create(
+            socket_handle.get(), client_identity->get(),
+            gm_bytes{server_digest.data(), server_digest.size()}, &tls);
+        if (status != GM_OK || tls == nullptr) {
+            throw std::runtime_error(runtime_error("TLS client setup", status));
+        }
+        tls_handle.emplace(tls);
+        status = gm_runtime_tls_handshake(tls_handle->get());
+        if (status != GM_OK) {
+            throw std::runtime_error(runtime_error("mutual TLS handshake", status));
+        }
+        gm_runtime_udp_socket *udp = nullptr;
+        status = gm_runtime_udp_bind_ipv4(options.udp_port, kDefaultReceiveTimeoutMs, &udp);
+        if (status != GM_OK || udp == nullptr) {
+            throw std::runtime_error(runtime_error("UDP bind", status));
+        }
+        udp_handle.emplace(udp);
+        std::cout << "mutual TLS 1.3 established; UDP port " << options.udp_port << " prebound\n";
+    }
+    const ControlConnection connection{socket_handle.get(), tls_handle ? tls_handle->get() : nullptr};
+
+    send_control_json(connection, session_hello_json(options), "session.hello");
+    const gm_control_message_info hello_result = receive_result_for_id(connection, 1u, "session.hello result");
     if (std::strcmp(hello_result.role, "apple-output-server") != 0 || hello_result.session_id[0] == '\0') {
         throw std::runtime_error("session.hello result did not include the expected Apple output-server identity");
     }
@@ -483,26 +743,94 @@ void run_connect(const Options &options) {
         std::cout << "warning: no --expect-server-id supplied; server_id is logged but not pinned\n";
     }
 
-    send_control_json(socket_handle.get(), transport_bind_json(hello_result.session_id, options.udp_port), "transport.bind");
-    const gm_control_message_info bind_result = receive_result_for_id(socket_handle.get(), 2u, "transport.bind result");
+    send_control_json(connection, transport_bind_json(hello_result.session_id, options.udp_port), "transport.bind");
+    const gm_control_message_info bind_result = receive_result_for_id(connection, 2u, "transport.bind result");
     if (std::strcmp(bind_result.path_state, "bound") != 0) {
         throw std::runtime_error("transport.bind result did not report path_state=bound");
     }
 
-    send_control_json(socket_handle.get(), stream_open_json(options.playout_target_ms), "stream.open");
-    const gm_control_message_info open_result = receive_result_for_id(socket_handle.get(), 3u, "stream.open result");
+    send_control_json(connection, stream_open_json(options.playout_target_ms), "stream.open");
+    const gm_control_message_info open_result = receive_result_for_id(connection, 3u, "stream.open result");
     if (std::strcmp(open_result.path_state, "probing") != 0 || open_result.stream_id == 0u || open_result.key_epoch == 0u) {
         throw std::runtime_error("stream.open result did not report a probing stream");
     }
 
     validate_path_headers(open_result, hello_result.session_id);
+    if (options.phase3_test) {
+        const auto session_id = decode_session_id(hello_result.session_id);
+        const auto forward_keys = derive_phase3_keys(
+            tls_handle->get(), session_id, open_result.stream_id, GM_MEDIA_DIRECTION_WIN_TO_APPLE,
+            open_result.key_epoch, client_digest, server_digest);
+        const auto reverse_keys = derive_phase3_keys(
+            tls_handle->get(), session_id, open_result.stream_id, GM_MEDIA_DIRECTION_APPLE_TO_WIN,
+            open_result.key_epoch, server_digest, client_digest);
+        std::vector<uint8_t> challenge(12u);
+        gm_status status = gm_runtime_random_bytes(gm_mut_bytes{challenge.data(), challenge.size()});
+        if (status != GM_OK) {
+            throw std::runtime_error(runtime_error("path challenge randomness", status));
+        }
+        const std::vector<uint8_t> protected_challenge = seal_media_datagram(
+            session_id, open_result.stream_id, GM_MEDIA_KIND_PATH_CHALLENGE,
+            GM_MEDIA_DIRECTION_WIN_TO_APPLE, open_result.key_epoch, 1u, 0u,
+            challenge, forward_keys.path_key);
+        status = gm_runtime_udp_send_to(
+            udp_handle->get(), options.host.c_str(), static_cast<uint16_t>(hello_result.udp_port),
+            gm_bytes{protected_challenge.data(), protected_challenge.size()});
+        if (status != GM_OK) {
+            throw std::runtime_error(runtime_error("PATH_CHALLENGE send", status));
+        }
+        std::array<uint8_t, GM_MEDIA_MAX_DATAGRAM_BYTES> received_buffer{};
+        char source_host[64]{};
+        uint16_t source_port = 0u;
+        size_t received_size = 0u;
+        status = gm_runtime_udp_receive_from(
+            udp_handle->get(), gm_mut_bytes{received_buffer.data(), received_buffer.size()}, &received_size,
+            source_host, sizeof(source_host), &source_port);
+        if (status != GM_OK) {
+            throw std::runtime_error(runtime_error("PATH_RESPONSE receive", status));
+        }
+        std::vector<uint8_t> response_datagram(received_buffer.begin(), received_buffer.begin() + received_size);
+        std::vector<uint8_t> response_payload;
+        const gm_media_header response = open_media_datagram(response_datagram, reverse_keys.path_key, response_payload);
+        if (response.kind != GM_MEDIA_KIND_PATH_RESPONSE || response.stream_id != open_result.stream_id ||
+            response.key_epoch != open_result.key_epoch || source_host != options.host ||
+            source_port != hello_result.udp_port ||
+            response_payload != challenge) {
+            throw std::runtime_error("PATH_RESPONSE did not validate the candidate UDP path");
+        }
+        std::cout << "protected UDP path validated from " << source_host << ':' << source_port << "\n";
+
+        constexpr uint64_t kFirstTimestamp = 48000u;
+        send_control_json(connection, stream_start_json(open_result.stream_id, kFirstTimestamp), "stream.start");
+        const gm_control_message_info start_result = receive_result_for_id(connection, 4u, "stream.start result");
+        if (std::strcmp(start_result.state, "started") != 0) {
+            throw std::runtime_error("stream.start result did not report state=started");
+        }
+        for (uint64_t packet_index = 0u; packet_index < kPhase3PacketCount; ++packet_index) {
+            const std::vector<uint8_t> pcm = synthetic_pcm_packet(packet_index);
+            const std::vector<uint8_t> audio = seal_media_datagram(
+                session_id, open_result.stream_id, GM_MEDIA_KIND_AUDIO,
+                GM_MEDIA_DIRECTION_WIN_TO_APPLE, open_result.key_epoch, packet_index + 2u,
+                kFirstTimestamp + packet_index * 240u, pcm, forward_keys.media_key);
+            status = gm_runtime_udp_send_to(
+                udp_handle->get(), options.host.c_str(), static_cast<uint16_t>(hello_result.udp_port),
+                gm_bytes{audio.data(), audio.size()});
+            if (status != GM_OK) {
+                throw std::runtime_error(runtime_error("PCM UDP send", status));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        std::cout << "sent " << kPhase3PacketCount << " encrypted synthetic PCM packets\n";
+    }
     std::cout << "control interop reached stream.open\n"
               << "  server_id: " << hello_result.server_id << "\n"
               << "  session_id: " << hello_result.session_id << "\n"
               << "  apple_udp_port: " << hello_result.udp_port << "\n"
               << "  stream_id: " << open_result.stream_id << "\n"
               << "  key_epoch: " << open_result.key_epoch << "\n"
-              << "  next: add TLS exporter/AES-GCM before sending UDP media\n";
+              << (options.phase3_test
+                  ? "  Phase 3 secure control, path validation, and synthetic sender completed\n"
+                  : "  next: add TLS exporter/AES-GCM before sending UDP media\n");
 }
 } // namespace
 

@@ -187,13 +187,13 @@ Core Audio output.
 ### Components
 
 - [x] Partial: Windows pre-TLS control probe reaches `stream.open` against the Mac harness.
-- [ ] Windows console control client and media sender.
-- [ ] Apple CLI output server and media receiver.
+- [x] Windows console control client and media sender for the explicit Phase 3 test fixture.
+- [x] Apple CLI output server and media receiver with deterministic discard sink.
 - [ ] mDNS browse and advertisement adapters.
 - [x] Shared TCP/TLS transport adapter with encrypted loopback I/O.
-- [ ] UDP media transport adapters.
-- [ ] Synthetic 48 kHz stereo PCM source.
-- [ ] Deterministic discard sink.
+- [x] IPv4 UDP media transport adapters.
+- [x] Synthetic 48 kHz stereo PCM source.
+- [x] Deterministic discard sink.
 - [ ] Capture trace tooling.
 - [ ] Network fault injection tooling.
 
@@ -211,19 +211,19 @@ Core Audio output.
 - [x] Local dry-run and loopback smoke coverage for the probe.
 - [x] Manual LAN addressing flow documented as authorized test mode.
 - [ ] DNS-SD browse limited to an explicitly enabled private interface.
-- [ ] TLS-backed control connection.
-- [ ] UDP path validation sender.
-- [ ] Synthetic PCM packetizer and pacer.
+- [x] TLS-backed control connection in the explicit pinned-identity test fixture.
+- [x] UDP path validation sender.
+- [x] Synthetic PCM packetizer and 5 ms pacer.
 - [ ] Client-side connection limits.
 - [ ] Sender-initiated rekey.
 
 ### Apple output server
 
 - [x] Partial: one-shot Mac listener can satisfy the first control probe.
-- [ ] CLI output server accepts the real TLS control connection.
-- [ ] Trust approval path for the Windows client.
-- [ ] UDP receive, decrypt, replay, reorder, and metrics path.
-- [ ] Deterministic discard sink.
+- [x] CLI output server accepts the real TLS control connection in the explicit test fixture.
+- [x] Preapproved test-fixture trust path for the Windows client.
+- [x] UDP receive, decrypt, replay, and discard-count path for ordered synthetic PCM.
+- [x] Deterministic discard sink.
 - [ ] Receiver loss and interface-loss behavior.
 
 ### Exit checks
@@ -457,7 +457,7 @@ Goal: produce signed, observable, maintainable platform releases.
 - [x] Real Mac one-shot listener accepted the Windows pre-TLS control probe.
 - [x] Probe reached `stream.open` with server ID
   `01234567-89ab-cdef-0123-456789abcdef`.
-- [ ] TLS/exporter adapter replaces the plaintext probe path.
+- [x] Explicit TLS/exporter Phase 3 fixture runs alongside the retained plaintext probe.
 - [x] AES-GCM media key/vector lock completed before UDP media is sent.
-- [ ] Secure UDP path challenge/response completed.
-- [ ] Synthetic PCM packets sent and received over protected UDP.
+- [x] Secure UDP path challenge/response implemented for the Phase 3 fixture.
+- [x] Synthetic PCM packets sent and received over protected UDP by the Phase 3 fixture.

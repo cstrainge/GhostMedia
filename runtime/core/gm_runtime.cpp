@@ -5,9 +5,12 @@
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <vector>
+
+#include <openssl/rand.h>
 
 struct gm_runtime_identity {
     std::unique_ptr<ghostmedia::runtime::Ed25519Identity> value;
@@ -241,6 +244,14 @@ gm_status gm_runtime_aes256_gcm_decrypt(gm_bytes key, gm_bytes nonce, gm_bytes a
         std::memcpy(plaintext.data, decrypted.data(), decrypted.size());
     }
     return status;
+}
+
+gm_status gm_runtime_random_bytes(gm_mut_bytes output) {
+    if (output.data == nullptr || output.size == 0u ||
+        output.size > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return GM_BAD_ARGUMENT;
+    }
+    return RAND_bytes(output.data, static_cast<int>(output.size)) == 1 ? GM_OK : GM_INTERNAL;
 }
 
 gm_status gm_runtime_tls13_exporter_pair(const gm_runtime_identity *client_identity,

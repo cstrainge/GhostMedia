@@ -18,7 +18,7 @@ and pass tests before WDK driver work begins.
 by Windows and Apple. It owns OpenSSL 3 AES-256-GCM, Ed25519/X.509, pinned mutual
 TLS 1.3, exporters, and portable socket I/O while relying on `gm_core` for wire
 layout, replay, epoch, policy, and exporter-context validation. Windows protected
-identity/trust persistence and live TLS client orchestration remain separate work.
+Production identity/trust persistence and service orchestration remain separate work.
 
 The Windows preset uses vcpkg manifest mode through `VCPKG_ROOT`. Visual Studio's
 bundled vcpkg is sufficient:
@@ -59,5 +59,9 @@ Pre-TLS framed TCP test against a Mac CLI harness:
 
 The `--allow-plaintext` flag is deliberate. This probe is for first interop only;
 the v1 protocol still requires mutually pinned TLS before real conformance testing.
+
+For the secured Phase 3 synthetic-media fixture, see
+[PHASE3_TEST.md](PHASE3_TEST.md). It uses `--phase3-test` to select pinned mutual
+TLS, TLS-exporter keys, protected UDP path validation, and a deterministic PCM sender.
 Use `--expect-server-id <uuid>` once the Mac harness has a stable test server ID so
 the Windows probe rejects an unexpected peer identity during `session.hello`.
