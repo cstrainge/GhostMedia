@@ -3,6 +3,28 @@ import Foundation
 import Testing
 
 @Test
+func controlSessionOwnsPhaseThreeLifecycleAndMetrics() throws {
+    var session = try ControlSession(configuration: ControlSessionConfiguration(
+        serverID: "01234567-89ab-cdef-0123-456789abcdef",
+        bootID: "11111111-2222-3333-4444-555555555555",
+        sessionID: "00112233445566778899aabbccddeeff",
+        appleUDPPort: 51_838
+    ))
+
+    #expect(try session.ingest(Data(#"{"v":1,"id":1,"type":"session.hello","role":"win-client","client_name":"test","versions":[1],"udp_port":49152}"#.utf8), nowNanoseconds: 1).kind == .sessionHelloResult)
+    #expect(try session.ingest(Data(#"{"v":1,"id":2,"type":"transport.bind","session_id":"00112233445566778899aabbccddeeff","udp_port":49152}"#.utf8), nowNanoseconds: 2).kind == .transportBindResult)
+    #expect(try session.ingest(Data(#"{"v":1,"id":3,"type":"stream.open","kind":"audio","direction":"win_to_apple","profile":{"codec":"pcm_s16le","sample_rate_hz":48000,"channels":2,"channel_layout":"stereo","frames_per_packet":240},"playout_target_ms":30}"#.utf8), nowNanoseconds: 3).kind == .streamOpenResult)
+    #expect(try session.markPathValidated(streamID: 1, keyEpoch: 1).kind == .pathValidated)
+    #expect(try session.ingest(Data(#"{"v":1,"id":4,"type":"stream.start","stream_id":1,"first_media_timestamp":"0"}"#.utf8), nowNanoseconds: 4).kind == .streamStartResult)
+    #expect(try session.ingest(Data(#"{"v":1,"id":5,"type":"stream.rekey","stream_id":1,"key_epoch":2}"#.utf8), nowNanoseconds: 5).kind == .streamRekeyResult)
+
+    let metrics = try session.metrics()
+    #expect(metrics.validRequests == 5)
+    #expect(metrics.streamsStarted == 1)
+    #expect(metrics.rekeysCommitted == 1)
+}
+
+@Test
 func sharedCoreVersionIsAvailableThroughTheSwiftBridge() throws {
     let version = try ProtocolCore.version()
 

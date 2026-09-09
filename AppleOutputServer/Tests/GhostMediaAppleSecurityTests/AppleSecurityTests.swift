@@ -520,3 +520,38 @@ func identityAndTrustRecordsPersistAndRejectCorruption() throws {
         _ = try AppleIdentityManager(store: corruptCertificateStore).loadOrCreate()
     })
 }
+
+@Test
+func trustStoreApprovalAndRevocationFailClosed() throws {
+    let store = MemorySecureStore()
+    let trustStore = AppleTrustStore(store: store)
+    let peer = Data(repeating: 0x5a, count: 32)
+
+    #expect(try !trustStore.authorizes(
+        peerSPKIDigest: peer,
+        permission: .connect
+    ))
+    #expect(try !trustStore.authorizes(
+        peerSPKIDigest: Data(repeating: 0x5a, count: 31),
+        permission: .connect
+    ))
+
+    try trustStore.approve(
+        peerSPKIDigest: peer,
+        permissions: [.connect, .receiveSystemAudio]
+    )
+    #expect(try trustStore.authorizes(peerSPKIDigest: peer, permission: .connect))
+    #expect(try trustStore.authorizes(
+        peerSPKIDigest: peer,
+        permission: .receiveSystemAudio
+    ))
+    #expect(try !trustStore.authorizes(
+        peerSPKIDigest: peer,
+        permission: .provideMicrophone
+    ))
+
+    try trustStore.revoke(peerSPKIDigest: peer)
+    #expect(try !trustStore.authorizes(peerSPKIDigest: peer, permission: .connect))
+    let revoked = try #require(try trustStore.record(for: peer))
+    #expect(revoked.isRevoked)
+}
