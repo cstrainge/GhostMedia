@@ -4,6 +4,9 @@ This directory is the home for macOS/iOS output-server code. Shared Swift
 contracts, protocol bridging, tests, and reusable UI stay here; future platform
 hosts supply their own lifecycle, identity, transport, and audio adapters.
 
+The approved macOS application and menu-bar interaction contract is in
+[MACOS_UX.md](MACOS_UX.md).
+
 Phase 1 integrates the deterministic shared core through the `GhostMediaCore`
 Clang module. `GhostMediaProtocolBridge` converts accepted C ABI results into safe
 Swift values, and `GhostMediaAppleHarness` exercises control framing and parsing,
