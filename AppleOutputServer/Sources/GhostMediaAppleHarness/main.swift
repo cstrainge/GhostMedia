@@ -8,7 +8,9 @@ private let testServerID = "01234567-89ab-cdef-0123-456789abcdef"
 private let testSessionID = "00112233445566778899aabbccddeeff"
 private let testBootID = "11111111-2222-3333-4444-555555555555"
 private let testAppleUDPPort: UInt32 = 51_838
-private let socketTimeoutSeconds = 10
+// A two-host operator needs enough time to start the peer after the listener
+// reports readiness. This remains bounded so a forgotten one-shot fixture exits.
+private let socketTimeoutSeconds = 60
 private let phase3PacketCount = 8
 private let phase3WindowsPrivateKey = Data([
     0x01, 0x72, 0x65, 0x9f, 0x44, 0x3a, 0x8c, 0xd1,
@@ -195,6 +197,8 @@ enum GhostMediaAppleHarness {
             let clientIdentity = try AppleOutputIdentity.phase3TestIdentity(
                 privateKeyRaw: phase3WindowsPrivateKey
             )
+            print("phase3 fixture pins: windows=\(hex(clientIdentity.spkiDigest)) apple=\(hex(serverIdentity.spkiDigest))")
+            fflush(stdout)
             let tls = try AppleRuntimeTLSSession.accept(
                 connection: connection.pointer,
                 identity: serverIdentity,
@@ -777,5 +781,9 @@ enum GhostMediaAppleHarness {
             index = next
         }
         return output
+    }
+
+    private static func hex(_ bytes: Data) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 }

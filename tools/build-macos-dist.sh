@@ -38,6 +38,7 @@ copy_product GhostMediaAppleHarness "GhostMediaAppleHarness-macos-$architecture"
 copy_product GhostMediaWinControlProbe "GhostMediaWinControlProbe-macos-$architecture"
 copy_product GhostMediaRuntimeTests "GhostMediaRuntimeTests-macos-$architecture"
 copy_product GhostMediaMac "GhostMediaMac-macos-$architecture"
+cp -R "$bin_path/OpenSSL.framework" "$stage_path/OpenSSL.framework"
 
 for artifact in "$stage_path"/*; do
     mv "$artifact" "$dist_path/$(basename "$artifact")"

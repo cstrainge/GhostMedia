@@ -37,6 +37,9 @@ repository-root `dist/` directory, use:
 tools/build-macos-dist.sh
 ```
 
+The script also places the required `OpenSSL.framework` beside the executables,
+so `dist/GhostMediaAppleHarness-macos-<architecture>` can run directly.
+
 Run the one-shot pre-TLS listener for the Windows control probe:
 
 ```sh
