@@ -30,6 +30,16 @@ xcrun swift run GhostMediaRuntimeTests
 xcrun swift build --product GhostMediaMac
 ```
 
+To run the Swift suite and publish the inspectable macOS executables to the
+repository-root `dist/` directory, use:
+
+```sh
+tools/build-macos-dist.sh
+```
+
+The script also places the required `OpenSSL.framework` beside the executables,
+so `dist/GhostMediaAppleHarness-macos-<architecture>` can run directly.
+
 Run the one-shot pre-TLS listener for the Windows control probe:
 
 ```sh

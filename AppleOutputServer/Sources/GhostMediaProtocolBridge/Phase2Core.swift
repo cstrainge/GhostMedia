@@ -151,6 +151,187 @@ public struct EpochWindow {
     }
 }
 
+public struct ControlSessionConfiguration: Equatable, Sendable {
+    public let serverID: String
+    public let bootID: String
+    public let sessionID: String
+    public let appleUDPPort: UInt32
+    public let streamID: UInt32
+    public let keyEpoch: UInt32
+    public let outputAvailable: Bool
+
+    public init(
+        serverID: String,
+        bootID: String,
+        sessionID: String,
+        appleUDPPort: UInt32,
+        streamID: UInt32 = 1,
+        keyEpoch: UInt32 = 1,
+        outputAvailable: Bool = true
+    ) {
+        self.serverID = serverID
+        self.bootID = bootID
+        self.sessionID = sessionID
+        self.appleUDPPort = appleUDPPort
+        self.streamID = streamID
+        self.keyEpoch = keyEpoch
+        self.outputAvailable = outputAvailable
+    }
+}
+
+public enum ControlSessionActionKind: Equatable, Sendable {
+    case sessionHelloResult
+    case transportBindResult
+    case streamOpenResult
+    case streamStartResult
+    case streamStopResult
+    case streamCloseResult
+    case streamRekeyResult
+    case statusResult
+    case pingResult
+    case sessionCloseResult
+    case pathValidated
+    case errorResult
+    case errorClose
+    case unknown(UInt32)
+
+    fileprivate init(rawValue: UInt32) {
+        switch rawValue {
+        case UInt32(GM_CONTROL_ACTION_SEND_SESSION_HELLO_RESULT.rawValue): self = .sessionHelloResult
+        case UInt32(GM_CONTROL_ACTION_SEND_TRANSPORT_BIND_RESULT.rawValue): self = .transportBindResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STREAM_OPEN_RESULT.rawValue): self = .streamOpenResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STREAM_START_RESULT.rawValue): self = .streamStartResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STREAM_STOP_RESULT.rawValue): self = .streamStopResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STREAM_CLOSE_RESULT.rawValue): self = .streamCloseResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STREAM_REKEY_RESULT.rawValue): self = .streamRekeyResult
+        case UInt32(GM_CONTROL_ACTION_SEND_STATUS_RESULT.rawValue): self = .statusResult
+        case UInt32(GM_CONTROL_ACTION_SEND_PING_RESULT.rawValue): self = .pingResult
+        case UInt32(GM_CONTROL_ACTION_SEND_SESSION_CLOSE_RESULT.rawValue): self = .sessionCloseResult
+        case UInt32(GM_CONTROL_ACTION_PATH_VALIDATED.rawValue): self = .pathValidated
+        case UInt32(GM_CONTROL_ACTION_SEND_ERROR_RESULT.rawValue): self = .errorResult
+        case UInt32(GM_CONTROL_ACTION_SEND_ERROR_CLOSE.rawValue): self = .errorClose
+        default: self = .unknown(rawValue)
+        }
+    }
+}
+
+public struct ControlSessionAction: Equatable, Sendable {
+    public let kind: ControlSessionActionKind
+    public let responseID: UInt32
+    public let streamID: UInt32
+    public let keyEpoch: UInt32
+    public let isTerminal: Bool
+}
+
+public struct ControlSessionMetrics: Equatable, Sendable {
+    public let validRequests: UInt64
+    public let rejectedRequests: UInt64
+    public let actionsEmitted: UInt64
+    public let stateConflicts: UInt64
+    public let protocolErrors: UInt64
+    public let streamsStarted: UInt64
+    public let streamsStopped: UInt64
+    public let streamsClosed: UInt64
+    public let rekeysCommitted: UInt64
+}
+
+/// Swift ownership and value mapping for the authoritative Phase 3 control
+/// state machine. Transport code passes every authenticated control payload
+/// through this type before acting on it.
+public struct ControlSession {
+    private var rawValue: gm_control_session
+
+    public init(configuration: ControlSessionConfiguration) throws {
+        var rawConfiguration = gm_control_session_config()
+        rawConfiguration.struct_size = MemoryLayout<gm_control_session_config>.size
+        rawConfiguration.abi_version = UInt32(GM_ABI_VERSION)
+        rawConfiguration.role = UInt32(GM_CONTROL_SESSION_ROLE_APPLE_OUTPUT_SERVER.rawValue)
+        rawConfiguration.apple_udp_port = configuration.appleUDPPort
+        rawConfiguration.stream_id = configuration.streamID
+        rawConfiguration.key_epoch = configuration.keyEpoch
+        rawConfiguration.max_audio_subscribers = 1
+        rawConfiguration.playout_target_ms_min = 15
+        rawConfiguration.playout_target_ms_max = 120
+        rawConfiguration.output_available = configuration.outputAvailable ? 1 : 0
+        Self.copyCString(configuration.serverID, into: &rawConfiguration.server_id)
+        Self.copyCString(configuration.bootID, into: &rawConfiguration.boot_id)
+        Self.copyCString(configuration.sessionID, into: &rawConfiguration.session_id)
+
+        var rawValue = gm_control_session()
+        rawValue.struct_size = MemoryLayout<gm_control_session>.size
+        try ProtocolCore.requireOK(
+            gm_control_session_init(&rawConfiguration, &rawValue),
+            operation: "gm_control_session_init"
+        )
+        self.rawValue = rawValue
+    }
+
+    public mutating func ingest(_ json: Data, nowNanoseconds: UInt64) throws -> ControlSessionAction {
+        var action = gm_control_action()
+        action.struct_size = MemoryLayout<gm_control_action>.size
+        let status = json.withUnsafeBytes { bytes in
+            gm_control_session_ingest(
+                &rawValue,
+                gm_bytes(data: bytes.bindMemory(to: UInt8.self).baseAddress, size: bytes.count),
+                nowNanoseconds,
+                &action
+            )
+        }
+        try ProtocolCore.requireOK(status, operation: "gm_control_session_ingest")
+        return ControlSessionAction(
+            kind: ControlSessionActionKind(rawValue: action.kind),
+            responseID: action.response_id,
+            streamID: action.stream_id,
+            keyEpoch: action.key_epoch,
+            isTerminal: action.terminal != 0
+        )
+    }
+
+    public mutating func markPathValidated(streamID: UInt32, keyEpoch: UInt32) throws -> ControlSessionAction {
+        var action = gm_control_action()
+        action.struct_size = MemoryLayout<gm_control_action>.size
+        try ProtocolCore.requireOK(
+            gm_control_session_mark_path_validated(&rawValue, streamID, keyEpoch, &action),
+            operation: "gm_control_session_mark_path_validated"
+        )
+        return ControlSessionAction(
+            kind: ControlSessionActionKind(rawValue: action.kind),
+            responseID: action.response_id,
+            streamID: action.stream_id,
+            keyEpoch: action.key_epoch,
+            isTerminal: action.terminal != 0
+        )
+    }
+
+    public mutating func metrics() throws -> ControlSessionMetrics {
+        var rawMetrics = gm_control_metrics()
+        rawMetrics.struct_size = MemoryLayout<gm_control_metrics>.size
+        try ProtocolCore.requireOK(
+            gm_control_session_get_metrics(&rawValue, &rawMetrics),
+            operation: "gm_control_session_get_metrics"
+        )
+        return ControlSessionMetrics(
+            validRequests: rawMetrics.valid_requests,
+            rejectedRequests: rawMetrics.rejected_requests,
+            actionsEmitted: rawMetrics.actions_emitted,
+            stateConflicts: rawMetrics.state_conflicts,
+            protocolErrors: rawMetrics.protocol_errors,
+            streamsStarted: rawMetrics.streams_started,
+            streamsStopped: rawMetrics.streams_stopped,
+            streamsClosed: rawMetrics.streams_closed,
+            rekeysCommitted: rawMetrics.rekeys_committed
+        )
+    }
+
+    private static func copyCString<T>(_ value: String, into destination: inout T) {
+        withUnsafeMutableBytes(of: &destination) { bytes in
+            bytes.initializeMemory(as: UInt8.self, repeating: 0)
+            let source = Array(value.utf8)
+            bytes.prefix(max(0, bytes.count - 1)).copyBytes(from: source)
+        }
+    }
+}
+
 public extension ProtocolCore {
     static var tlsExporterLabel: String {
         String(cString: gm_tls_exporter_label())

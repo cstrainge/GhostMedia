@@ -8,7 +8,9 @@ private let testServerID = "01234567-89ab-cdef-0123-456789abcdef"
 private let testSessionID = "00112233445566778899aabbccddeeff"
 private let testBootID = "11111111-2222-3333-4444-555555555555"
 private let testAppleUDPPort: UInt32 = 51_838
-private let socketTimeoutSeconds = 10
+// A two-host operator needs enough time to start the peer after the listener
+// reports readiness. This remains bounded so a forgotten one-shot fixture exits.
+private let socketTimeoutSeconds = 60
 private let phase3PacketCount = 8
 private let phase3WindowsPrivateKey = Data([
     0x01, 0x72, 0x65, 0x9f, 0x44, 0x3a, 0x8c, 0xd1,
@@ -195,6 +197,8 @@ enum GhostMediaAppleHarness {
             let clientIdentity = try AppleOutputIdentity.phase3TestIdentity(
                 privateKeyRaw: phase3WindowsPrivateKey
             )
+            print("phase3 fixture pins: windows=\(hex(clientIdentity.spkiDigest)) apple=\(hex(serverIdentity.spkiDigest))")
+            fflush(stdout)
             let tls = try AppleRuntimeTLSSession.accept(
                 connection: connection.pointer,
                 identity: serverIdentity,
@@ -421,7 +425,18 @@ enum GhostMediaAppleHarness {
             throw HarnessError.unexpectedMessage("Phase 3 requires TLS transport")
         }
         var decoder = ControlFrameDecoder()
-        let hello = try receiveMessage(transport, decoder: &decoder)
+        var control = try ControlSession(configuration: ControlSessionConfiguration(
+            serverID: testServerID,
+            bootID: testBootID,
+            sessionID: testSessionID,
+            appleUDPPort: testAppleUDPPort
+        ))
+        var controlNow: UInt64 = 1
+        let hello = try receiveMessage(transport, decoder: &decoder) { payload in
+            let action = try control.ingest(payload, nowNanoseconds: controlNow)
+            controlNow += 1
+            try require(action.kind == .sessionHelloResult, "shared control state rejected session.hello")
+        }
         try require(
             hello.kind == .requestSessionHello && hello.id == 1 && hello.role == "win-client" && hello.udpPort != nil,
             "expected encrypted id:1 session.hello from win-client"
@@ -432,14 +447,22 @@ enum GhostMediaAppleHarness {
             """,
             to: transport
         )
-        let bind = try receiveMessage(transport, decoder: &decoder)
+        let bind = try receiveMessage(transport, decoder: &decoder) { payload in
+            let action = try control.ingest(payload, nowNanoseconds: controlNow)
+            controlNow += 1
+            try require(action.kind == .transportBindResult, "shared control state rejected transport.bind")
+        }
         try require(
             bind.kind == .requestTransportBind && bind.id == 2 && bind.sessionID == testSessionID && bind.udpPort == hello.udpPort,
             "expected encrypted id:2 transport.bind for the prebound Windows UDP port"
         )
         try sendResponse(#"{"v":1,"id":2,"type":"result","result":{"udp_port":51838,"path_state":"bound"}}"#, to: transport)
 
-        let open = try receiveMessage(transport, decoder: &decoder)
+        let open = try receiveMessage(transport, decoder: &decoder) { payload in
+            let action = try control.ingest(payload, nowNanoseconds: controlNow)
+            controlNow += 1
+            try require(action.kind == .streamOpenResult, "shared control state rejected stream.open")
+        }
         try require(
             open.kind == .requestStreamOpen && open.id == 3 && open.profile?.codec == .pcmS16LE,
             "expected encrypted id:3 PCM stream.open"
@@ -480,9 +503,17 @@ enum GhostMediaAppleHarness {
             udpSocket, host: sourceHost, port: sourcePort,
             datagram: try sealMedia(header: responseHeader, plaintext: challenge, key: reverse.pathKey)
         )
+        try require(
+            try control.markPathValidated(streamID: 1, keyEpoch: 1).kind == .pathValidated,
+            "shared control state rejected validated UDP path"
+        )
         print("protected UDP path validated for \(sourceHost):\(sourcePort)")
 
-        let start = try receiveMessage(transport, decoder: &decoder)
+        let start = try receiveMessage(transport, decoder: &decoder) { payload in
+            let action = try control.ingest(payload, nowNanoseconds: controlNow)
+            controlNow += 1
+            try require(action.kind == .streamStartResult, "shared control state rejected stream.start")
+        }
         try require(
             start.kind == .requestStreamStart && start.id == 4 && start.streamID == 1 && start.firstMediaTimestamp != nil,
             "expected encrypted stream.start after validated path"
@@ -509,15 +540,23 @@ enum GhostMediaAppleHarness {
             acceptedPackets += 1
             expectedTimestamp += 240
         }
+        let metrics = try control.metrics()
+        try require(
+            metrics.validRequests == 4 && metrics.streamsStarted == 1,
+            "shared control metrics did not record the Phase 3 lifecycle"
+        )
         print("Phase 3 secure media complete: discarded \(acceptedPackets) authenticated PCM packets")
+        print("control metrics: requests=\(metrics.validRequests) starts=\(metrics.streamsStarted)")
     }
 
     private static func receiveMessage(
         _ transport: ControlTransport,
-        decoder: inout ControlFrameDecoder
+        decoder: inout ControlFrameDecoder,
+        beforeParsing: ((Data) throws -> Void)? = nil
     ) throws -> ControlMessage {
         while true {
             if let payload = try decoder.nextPayload() {
+                try beforeParsing?(payload)
                 return try ProtocolCore.parseControlMessage(payload)
             }
 
@@ -742,5 +781,9 @@ enum GhostMediaAppleHarness {
             index = next
         }
         return output
+    }
+
+    private static func hex(_ bytes: Data) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 }

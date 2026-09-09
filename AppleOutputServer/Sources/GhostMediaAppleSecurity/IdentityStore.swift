@@ -566,6 +566,49 @@ public struct AppleTrustStore: Sendable {
         try store.set(data, for: key(for: record.peerSPKIDigest))
     }
 
+    /// Returns `true` only when an existing, non-revoked record grants the
+    /// requested permission. Unknown, malformed-length, and revoked peers fail
+    /// closed; callers must not start TLS control or derive media keys otherwise.
+    public func authorizes(
+        peerSPKIDigest: Data,
+        permission: TrustPermissions
+    ) throws -> Bool {
+        guard peerSPKIDigest.count == 32,
+              let record = try record(for: peerSPKIDigest) else {
+            return false
+        }
+        return try ProtocolCore.trustRecord(record.coreRecord, authorizes: permission)
+    }
+
+    /// Persists a local pairing decision. The caller is responsible for showing
+    /// the peer's full fingerprint and obtaining user approval before this call.
+    public func approve(
+        peerSPKIDigest: Data,
+        permissions: TrustPermissions
+    ) throws {
+        guard peerSPKIDigest.count == 32 else {
+            throw SecureStoreError.invalidStoredValue("peer SPKI digest")
+        }
+        try save(StoredTrustRecord(
+            peerSPKIDigest: peerSPKIDigest,
+            permissions: permissions
+        ))
+    }
+
+    /// Revocation is retained rather than deleted, preventing a revoked peer
+    /// from being treated as an unknown pairing by a later approval workflow.
+    public func revoke(peerSPKIDigest: Data) throws {
+        guard peerSPKIDigest.count == 32 else {
+            throw SecureStoreError.invalidStoredValue("peer SPKI digest")
+        }
+        let permissions = try record(for: peerSPKIDigest)?.coreRecord.permissions ?? []
+        try save(StoredTrustRecord(
+            peerSPKIDigest: peerSPKIDigest,
+            permissions: permissions,
+            isRevoked: true
+        ))
+    }
+
     private func key(for digest: Data) -> String {
         "trust-\(digest.map { String(format: "%02x", $0) }.joined())"
     }
