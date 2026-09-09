@@ -111,3 +111,9 @@ Swift Package Manager is the source-of-truth build graph for the shared modules 
 command-line verification. A signed application can use a thin Xcode app target
 that consumes the same local package. Signing, entitlements, capabilities, and
 asset catalogs belong to application targets rather than shared libraries.
+
+The release `.app` MUST embed the matching `OpenSSL.framework` in
+`GhostMedia.app/Contents/Frameworks/` and sign it with the application. The Phase
+3 command-line distribution places the same framework beside its executable for
+local inspection; this is not a substitute for proper application-framework
+embedding, signing, and notarization.
